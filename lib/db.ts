@@ -1,13 +1,11 @@
 import {createClient} from '@supabase/supabase-js';
 import type {TripState} from './types';
 
-const DEFAULT_URL='https://eqkmhlimpcrbxfnqbmru.supabase.co';
-const DEFAULT_PUBLISHABLE_KEY='sb_publishable_EunOB6Ro5BIhPeAcE0JrHw_usx94FuG';
+const SUPABASE_URL='https://eqkmhlimpcrbxfnqbmru.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY='sb_publishable_EunOB6Ro5BIhPeAcE0JrHw_usx94FuG';
 
 export function db(){
-  const url=process.env.NEXT_PUBLIC_SUPABASE_URL||DEFAULT_URL;
-  const key=process.env.SUPABASE_PUBLISHABLE_KEY||process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY||DEFAULT_PUBLISHABLE_KEY;
-  return createClient(url,key,{auth:{persistSession:false}});
+  return createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:false}});
 }
 
 export async function loadState():Promise<TripState|null>{
