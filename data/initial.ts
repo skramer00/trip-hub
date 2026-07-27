@@ -1,16 +1,80 @@
-import type {TripState} from '@/lib/types';
-export const initialState:TripState={
- days:[
- {date:'2026-09-24',label:'Thu 9/24',city:'Toronto',items:[{id:'d1-1',time:'10:30 AM',title:'Leave for LAX',details:'Bring lunch or buy food after TSA.',done:false},{id:'d1-2',time:'2:20 PM',title:'Porter flight to Toronto Pearson',done:false},{id:'d1-3',time:'10:00 PM',title:'Arrive and clear customs',done:false},{id:'d1-4',time:'Late',title:'UP Express to Union and hotel check-in',done:false}]},
- {date:'2026-09-25',label:'Fri 9/25',city:'Toronto',items:[{id:'d2-1',time:'Morning',title:'City Hall and Toronto sign',done:false},{id:'d2-2',time:'Afternoon',title:'Waterfront, railway museum, CN Tower or islands',done:false},{id:'d2-3',time:'Evening',title:'Dinner and poutine',done:false}]},
- {date:'2026-09-26',label:'Sat 9/26',city:'Niagara Falls',items:[{id:'d3-1',time:'Morning',title:'Check out and head to Union',done:false},{id:'d3-2',time:'11:00 AM',title:'GO train to Niagara Falls',done:false},{id:'d3-3',time:'Afternoon',title:'Canadian views and Rainbow Bridge crossing',done:false},{id:'d3-4',time:'10:00 PM',title:'Falls fireworks',optional:true,done:false}]},
- {date:'2026-09-27',label:'Sun 9/27',city:'Buffalo',items:[{id:'d4-1',time:'Morning',title:'Game shuttle',done:false},{id:'d4-2',time:'1:00 PM',title:'Chargers at Bills — Section 139',done:false},{id:'d4-3',time:'Evening',title:'Wings, beef on weck, or Stinger',done:false}]},
- {date:'2026-09-28',label:'Mon 9/28',city:'Niagara → Toronto',items:[{id:'d5-1',time:'Morning',title:'Maid of the Mist',done:false},{id:'d5-2',time:'Afternoon',title:'Cross to Canada and visit Horseshoe Falls',done:false},{id:'d5-3',time:'Later',title:'Train to Toronto and Revery check-in',done:false}]},
- {date:'2026-09-29',label:'Tue 9/29',city:'Toronto',items:[{id:'d6-1',time:'Morning',title:"Mildred's Temple Kitchen",done:false},{id:'d6-2',time:'Lunch',title:'St. Lawrence Market',done:false},{id:'d6-3',time:'Afternoon',title:'Kensington Market and Chinatown',done:false}]},
- {date:'2026-09-30',label:'Wed 9/30',city:'Toronto',items:[{id:'d7-1',time:'Morning',title:'Royal Ontario Museum',done:false},{id:'d7-2',time:'Afternoon',title:'Toronto Reference Library or Casa Loma',done:false},{id:'d7-3',time:'Later',title:'Butter tarts and bring-home shopping',done:false}]},
- {date:'2026-10-01',label:'Thu 10/1',city:'Travel home',items:[{id:'d8-1',time:'7:30 AM',title:'Check out and head to Union',done:false},{id:'d8-2',time:'8:00 AM',title:'UP Express to Pearson',done:false},{id:'d8-3',time:'11:00 AM',title:'Flight to LAX',done:false}]}
- ],
- foods:[{id:'f1',title:'Peameal bacon sandwich',category:'Try',done:false,notes:'Carousel Bakery'},{id:'f2',title:'Poutine',category:'Try',done:false},{id:'f3',title:'Butter tart',category:'Try',done:false},{id:'f4',title:'Montreal-style bagel',category:'Try',done:false},{id:'f5',title:'Buffalo wings',category:'Try',done:false},{id:'f6',title:'Beef on weck',category:'Try',done:false},{id:'f7',title:'Stinger sub',category:'Try',done:false},{id:'f8',title:'Sponge candy',category:'Bring home',done:false},{id:'f9',title:'Maple syrup',category:'Bring home',done:false},{id:'f10',title:'Coffee Crisp and Aero bars',category:'Bring home',done:false},{id:'f11',title:'All-Dressed or ketchup chips',category:'Bring home',done:false}],
- packing:[{id:'p1',title:'Passports and IDs',category:'Documents',done:true},{id:'p2',title:'Flight, hotel, and game confirmations',category:'Documents',done:false},{id:'p3',title:'Nexium and eye drops',category:'Health',done:false},{id:'p4',title:'Chargers and power banks',category:'Tech',done:false},{id:'p5',title:'iPad and headphones',category:'Tech',done:false},{id:'p6',title:'Chargers jerseys',category:'Clothes',done:false},{id:'p7',title:'Jacket and rain layer',category:'Clothes',done:false},{id:'p8',title:'Comfortable non-slip shoes',category:'Clothes',done:false},{id:'p9',title:'Packable duffel',category:'Bags',done:false},{id:'p10',title:'Empty water bottle',category:'Travel',done:false}],
- places:[]
+import { gunzipSync } from 'node:zlib';
+import { compressedPlaces } from '@/data/placesCompressed';
+import type { Place, TripState } from '@/lib/types';
+
+const places = JSON.parse(
+  gunzipSync(Buffer.from(compressedPlaces, 'base64')).toString('utf8')
+) as Place[];
+
+export const initialState: TripState = {
+  days: [
+    { date: '2026-09-24', label: 'Thu 9/24', city: 'Toronto', items: [
+      { id: 'd1-1', time: '10:30 AM', title: 'Leave for LAX', details: 'Bring lunch or buy food after TSA.', done: false },
+      { id: 'd1-2', time: '2:20 PM', title: 'Porter flight to Toronto Pearson', done: false },
+      { id: 'd1-3', time: '10:00 PM', title: 'Arrive and clear customs', done: false },
+      { id: 'd1-4', time: 'Late', title: 'UP Express to Union and hotel check-in', done: false },
+    ]},
+    { date: '2026-09-25', label: 'Fri 9/25', city: 'Toronto', items: [
+      { id: 'd2-1', time: 'Morning', title: 'City Hall and Toronto sign', done: false },
+      { id: 'd2-2', time: 'Afternoon', title: 'Waterfront, railway museum, CN Tower or islands', done: false },
+      { id: 'd2-3', time: 'Evening', title: 'Dinner and poutine', done: false },
+    ]},
+    { date: '2026-09-26', label: 'Sat 9/26', city: 'Niagara Falls', items: [
+      { id: 'd3-1', time: 'Morning', title: 'Check out and head to Union', done: false },
+      { id: 'd3-2', time: '11:00 AM', title: 'GO train to Niagara Falls', done: false },
+      { id: 'd3-3', time: 'Afternoon', title: 'Canadian views and Rainbow Bridge crossing', done: false },
+      { id: 'd3-4', time: '10:00 PM', title: 'Falls fireworks', optional: true, done: false },
+    ]},
+    { date: '2026-09-27', label: 'Sun 9/27', city: 'Buffalo', items: [
+      { id: 'd4-1', time: 'Morning', title: 'Game shuttle', done: false },
+      { id: 'd4-2', time: '1:00 PM', title: 'Chargers at Bills — Section 139', done: false },
+      { id: 'd4-3', time: 'Evening', title: 'Wings, beef on weck, or Stinger', done: false },
+    ]},
+    { date: '2026-09-28', label: 'Mon 9/28', city: 'Niagara → Toronto', items: [
+      { id: 'd5-1', time: 'Morning', title: 'Maid of the Mist', done: false },
+      { id: 'd5-2', time: 'Afternoon', title: 'Cross to Canada and visit Horseshoe Falls', done: false },
+      { id: 'd5-3', time: 'Later', title: 'Train to Toronto and Revery check-in', done: false },
+    ]},
+    { date: '2026-09-29', label: 'Tue 9/29', city: 'Toronto', items: [
+      { id: 'd6-1', time: 'Morning', title: "Mildred's Temple Kitchen", done: false },
+      { id: 'd6-2', time: 'Lunch', title: 'St. Lawrence Market', done: false },
+      { id: 'd6-3', time: 'Afternoon', title: 'Kensington Market and Chinatown', done: false },
+    ]},
+    { date: '2026-09-30', label: 'Wed 9/30', city: 'Toronto', items: [
+      { id: 'd7-1', time: 'Morning', title: 'Royal Ontario Museum', done: false },
+      { id: 'd7-2', time: 'Afternoon', title: 'Toronto Reference Library or Casa Loma', done: false },
+      { id: 'd7-3', time: 'Later', title: 'Butter tarts and bring-home shopping', done: false },
+    ]},
+    { date: '2026-10-01', label: 'Thu 10/1', city: 'Travel home', items: [
+      { id: 'd8-1', time: '7:30 AM', title: 'Check out and head to Union', done: false },
+      { id: 'd8-2', time: '8:00 AM', title: 'UP Express to Pearson', done: false },
+      { id: 'd8-3', time: '11:00 AM', title: 'Flight to LAX', done: false },
+    ]},
+  ],
+  foods: [
+    { id: 'f1', title: 'Peameal bacon sandwich', category: 'Try', done: false, notes: 'Carousel Bakery' },
+    { id: 'f2', title: 'Poutine', category: 'Try', done: false },
+    { id: 'f3', title: 'Butter tart', category: 'Try', done: false },
+    { id: 'f4', title: 'Montreal-style bagel', category: 'Try', done: false },
+    { id: 'f5', title: 'Buffalo wings', category: 'Try', done: false },
+    { id: 'f6', title: 'Beef on weck', category: 'Try', done: false },
+    { id: 'f7', title: 'Stinger sub', category: 'Try', done: false },
+    { id: 'f8', title: 'Sponge candy', category: 'Bring home', done: false },
+    { id: 'f9', title: 'Maple syrup', category: 'Bring home', done: false },
+    { id: 'f10', title: 'Coffee Crisp and Aero bars', category: 'Bring home', done: false },
+    { id: 'f11', title: 'All-Dressed or ketchup chips', category: 'Bring home', done: false },
+  ],
+  packing: [
+    { id: 'p1', title: 'Passports and IDs', category: 'Documents', done: true },
+    { id: 'p2', title: 'Flight, hotel, and game confirmations', category: 'Documents', done: false },
+    { id: 'p3', title: 'Nexium and eye drops', category: 'Health', done: false },
+    { id: 'p4', title: 'Chargers and power banks', category: 'Tech', done: false },
+    { id: 'p5', title: 'iPad and headphones', category: 'Tech', done: false },
+    { id: 'p6', title: 'Chargers jerseys', category: 'Clothes', done: false },
+    { id: 'p7', title: 'Jacket and rain layer', category: 'Clothes', done: false },
+    { id: 'p8', title: 'Comfortable non-slip shoes', category: 'Clothes', done: false },
+    { id: 'p9', title: 'Packable duffel', category: 'Bags', done: false },
+    { id: 'p10', title: 'Empty water bottle', category: 'Travel', done: false },
+  ],
+  places,
 };
