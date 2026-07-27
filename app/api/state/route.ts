@@ -1,25 +1,35 @@
 import {NextResponse} from 'next/server';
 import {loadState,saveState} from '@/lib/db';
 import {initialState} from '@/data/initial';
+import type {TripState} from '@/lib/types';
+
+function mergeState(stored:TripState):TripState{
+ const storedDays=new Map(stored.days.map(day=>[day.date,day]));
+ const days=initialState.days.map(day=>{
+  const savedDay=storedDays.get(day.date);
+  const savedItems=new Map(savedDay?.items.map(item=>[item.id,item])??[]);
+  return {...day,...savedDay,items:day.items.map(item=>({...item,...savedItems.get(item.id),mapUrl:item.mapUrl,routeText:item.routeText}))};
+ });
+ return {...initialState,...stored,days,places:stored.places?.length?stored.places:initialState.places};
+}
 
 export async function GET(){
-  try{
-    const stored=await loadState();
-    const state=stored?{...initialState,...stored,places:stored.places?.length?stored.places:initialState.places}:initialState;
-    return NextResponse.json({state,cloud:true});
-  }catch(error){
-    console.error('Trip state load failed; using local fallback.',error);
-    return NextResponse.json({state:initialState,cloud:false});
-  }
+ try{
+  const stored=await loadState();
+  return NextResponse.json({state:stored?mergeState(stored):initialState,cloud:true});
+ }catch(error){
+  console.error('Trip state load failed; using local fallback.',error);
+  return NextResponse.json({state:initialState,cloud:false});
+ }
 }
 
 export async function PUT(req:Request){
-  try{
-    const state=await req.json();
-    const saved=await saveState(state);
-    return NextResponse.json({ok:true,cloud:saved});
-  }catch(error){
-    console.error('Trip state save failed; keeping device copy.',error);
-    return NextResponse.json({ok:false,cloud:false},{status:200});
-  }
+ try{
+  const state=await req.json();
+  const saved=await saveState(state);
+  return NextResponse.json({ok:true,cloud:saved});
+ }catch(error){
+  console.error('Trip state save failed; keeping device copy.',error);
+  return NextResponse.json({ok:false,cloud:false},{status:200});
+ }
 }
