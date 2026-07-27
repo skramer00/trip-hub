@@ -1,4 +1,11 @@
-import type {TripState} from '@/lib/types';
+import {gunzipSync} from 'node:zlib';
+import {compressedPlaces} from './placesCompressed';
+import type {Place,TripState} from '@/lib/types';
+
+type CompactPlace=[string,0|1,string,string,string,string[],'must'|'possible'|'backup',string[]];
+const compact=JSON.parse(gunzipSync(Buffer.from(compressedPlaces,'base64')).toString('utf8')) as CompactPlace[];
+const places:Place[]=compact.map((p,index)=>({id:`place-${String(index+1).padStart(3,'0')}`,name:p[0],region:p[1]===0?'Toronto':'Niagara & Buffalo',category:p[2],notes:p[3],mapUrl:p[4].startsWith('http')?p[4]:`https://www.google.com/maps/place/${p[4]}`,menuUrl:'',websiteUrl:'',tags:p[5],priority:p[6],visited:false,recommendedDates:p[7]}));
+
 export const initialState:TripState={
  days:[
  {date:'2026-09-24',label:'Thu 9/24',city:'Toronto',items:[{id:'d1-1',time:'10:30 AM',title:'Leave for LAX',details:'Bring lunch or buy food after TSA.',done:false},{id:'d1-2',time:'2:20 PM',title:'Porter flight to Toronto Pearson',done:false},{id:'d1-3',time:'10:00 PM',title:'Arrive and clear customs',done:false},{id:'d1-4',time:'Late',title:'UP Express to Union and hotel check-in',done:false}]},
@@ -12,5 +19,5 @@ export const initialState:TripState={
  ],
  foods:[{id:'f1',title:'Peameal bacon sandwich',category:'Try',done:false,notes:'Carousel Bakery'},{id:'f2',title:'Poutine',category:'Try',done:false},{id:'f3',title:'Butter tart',category:'Try',done:false},{id:'f4',title:'Montreal-style bagel',category:'Try',done:false},{id:'f5',title:'Buffalo wings',category:'Try',done:false},{id:'f6',title:'Beef on weck',category:'Try',done:false},{id:'f7',title:'Stinger sub',category:'Try',done:false},{id:'f8',title:'Sponge candy',category:'Bring home',done:false},{id:'f9',title:'Maple syrup',category:'Bring home',done:false},{id:'f10',title:'Coffee Crisp and Aero bars',category:'Bring home',done:false},{id:'f11',title:'All-Dressed or ketchup chips',category:'Bring home',done:false}],
  packing:[{id:'p1',title:'Passports and IDs',category:'Documents',done:true},{id:'p2',title:'Flight, hotel, and game confirmations',category:'Documents',done:false},{id:'p3',title:'Nexium and eye drops',category:'Health',done:false},{id:'p4',title:'Chargers and power banks',category:'Tech',done:false},{id:'p5',title:'iPad and headphones',category:'Tech',done:false},{id:'p6',title:'Chargers jerseys',category:'Clothes',done:false},{id:'p7',title:'Jacket and rain layer',category:'Clothes',done:false},{id:'p8',title:'Comfortable non-slip shoes',category:'Clothes',done:false},{id:'p9',title:'Packable duffel',category:'Bags',done:false},{id:'p10',title:'Empty water bottle',category:'Travel',done:false}],
- places:[]
+ places
 };
