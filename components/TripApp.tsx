@@ -1,8 +1,8 @@
 'use client';
 
 import {useEffect,useMemo,useState} from 'react';
-import {buildAssistantState} from '@/lib/assistant';
-import type {AssistantState} from '@/lib/assistant';
+import {buildAssistantState,findSuggestionCandidates} from '@/lib/assistant';
+import type {AssistantState,SuggestedPlace} from '@/lib/assistant';
 import type {ItineraryItem,Place,TripState} from '@/lib/types';
 
 const tabs=['Today','Assistant','Itinerary','Food','Places','Checklist'] as const;
@@ -91,7 +91,7 @@ export default function TripApp(){
     <div className="between sectionHeading"><h2 className="sectionTitle">Recommended for this day</h2><button className="textButton" onClick={()=>{setRegion(currentDay.city.includes('Toronto')?'Toronto':'Niagara & Buffalo');setTab('Places');}}>See all</button></div>
     <div className="grid compactGrid">{nearbySuggestions.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>
    </section>}
-   {tab==='Assistant'&&assistant&&<AssistantView assistant={assistant} onComplete={item=>{
+   {tab==='Assistant'&&assistant&&<AssistantView assistant={assistant} tripState={state} onComplete={item=>{
     const day=state.days[assistant.currentDayIndex];
     const itemIndex=day?.items.findIndex(candidate=>candidate.id===item.id)??-1;
     if(itemIndex>=0)toggleDay(assistant.currentDayIndex,itemIndex);
@@ -134,9 +134,12 @@ function statusLabel(status:AssistantState['status']){
  return 'Plenty of flexibility';
 }
 
-function AssistantView({assistant,onComplete,onVisited,onShowPlaces}:{assistant:AssistantState;onComplete:(item:ItineraryItem)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void}){
+function AssistantView({assistant,tripState,onComplete,onVisited,onShowPlaces}:{assistant:AssistantState;tripState:TripState;onComplete:(item:ItineraryItem)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void}){
+ const [extraMinutes,setExtraMinutes]=useState<number|null>(null);
  const actionItem=assistant.currentActivity??assistant.nextReservation??assistant.nextItem;
  const fixedItem=assistant.nextReservation;
+ const extraSuggestions=useMemo(()=>assistant.currentDay&&extraMinutes?findSuggestionCandidates(tripState,assistant.currentDay,extraMinutes,6):[],[assistant.currentDay,extraMinutes,tripState]);
+ const displayedSuggestions:SuggestedPlace[]=extraMinutes?extraSuggestions:assistant.suggestions;
  return <section className="assistantPage">
   <div className={`card assistantHero assistant-${assistant.status}`}>
    <div className="assistantStatus"><span className="assistantPulse"/>{statusLabel(assistant.status)}</div>
@@ -144,6 +147,12 @@ function AssistantView({assistant,onComplete,onVisited,onShowPlaces}:{assistant:
    <h2>{assistant.headline}</h2>
    <p>{assistant.subheadline}</p>
    {assistant.notices.map((notice,index)=><div className={`assistantNotice notice-${notice.type}`} key={`${notice.type}-${index}`}>{notice.message}</div>)}
+   <div className="extraTimeControl">
+    <button className="btn" onClick={()=>setExtraMinutes(value=>value?null:60)}>{extraMinutes?'Close extra-time ideas':'I’ve got extra time'}</button>
+    {extraMinutes&&<div className="timeChoices" aria-label="Available free time">
+     {[30,60,90,120].map(minutes=><button className={extraMinutes===minutes?'active':''} key={minutes} onClick={()=>setExtraMinutes(minutes)}>{minutes<120?`${minutes} min`:'2 hours'}</button>)}
+    </div>}
+   </div>
   </div>
 
   {actionItem&&<div className="card assistantAction">
@@ -166,9 +175,9 @@ function AssistantView({assistant,onComplete,onVisited,onShowPlaces}:{assistant:
    <div className="reservationSummary"><span>Next fixed plan</span><strong>{fixedItem.title}</strong><small>{fixedItem.time}</small></div>
   </div>}
 
-  {assistant.suggestions.length>0&&<section>
-   <div className="pageIntro assistantIntro"><div><div className="eyebrow">GREAT OPTIONS RIGHT NOW</div><h2>You have time for something nearby</h2><p className="muted">These are options, not obligations. Pick whatever sounds good.</p></div><span className="chip">About {assistant.availableMinutes} min free</span></div>
-   <div className="grid assistantGrid">{assistant.suggestions.map(suggestion=><article className="card suggestionCard" key={suggestion.place.id}>
+  {displayedSuggestions.length>0&&<section>
+   <div className="pageIntro assistantIntro"><div><div className="eyebrow">{extraMinutes?'EXTRA-TIME IDEAS':'GREAT OPTIONS RIGHT NOW'}</div><h2>{extraMinutes?`Good options for about ${extraMinutes} minutes`:'You have time for something nearby'}</h2><p className="muted">These are options, not obligations. Pick whatever sounds good.</p></div><span className="chip">About {extraMinutes??assistant.availableMinutes} min free</span></div>
+   <div className="grid assistantGrid">{displayedSuggestions.map(suggestion=><article className="card suggestionCard" key={suggestion.place.id}>
     <div className="between"><span className={`priority priority-${suggestion.place.priority}`}>{suggestion.place.priority==='must'?'Must do':suggestion.place.priority}</span><span className="duration">{suggestion.estimatedDuration} min</span></div>
     <h3>{suggestion.place.name}</h3>
     <div className="muted small">{suggestion.place.category} · {suggestion.place.region}</div>
@@ -178,7 +187,8 @@ function AssistantView({assistant,onComplete,onVisited,onShowPlaces}:{assistant:
    </article>)}</div>
   </section>}
 
-  {assistant.suggestions.length===0&&!actionItem&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">✦</div><h2>Nothing you need to do right now.</h2><p className="muted">Enjoy the open time. Your itinerary and saved places are still available whenever you want them.</p></div>}
+  {extraMinutes&&displayedSuggestions.length===0&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">✦</div><h2>No saved places fit that window yet.</h2><p className="muted">Try a longer time window or browse all saved places.</p></div>}
+  {!extraMinutes&&assistant.suggestions.length===0&&!actionItem&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">✦</div><h2>Nothing you need to do right now.</h2><p className="muted">Enjoy the open time. Your itinerary and saved places are still available whenever you want them.</p></div>}
  </section>;
 }
 
