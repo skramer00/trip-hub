@@ -5,7 +5,7 @@ import {buildAssistantState,estimatedItemDuration,findSuggestionCandidates,infer
 import type {AssistantState,SuggestedPlace} from '@/lib/assistant';
 import type {ItineraryItem,Place,TripState} from '@/lib/types';
 
-const tabs=['Today','Assistant','Itinerary','Food','Places','Checklist'] as const;
+const tabs=['Today','Assistant','Itinerary','Reservations','Food','Places','Checklist'] as const;
 type Tab=(typeof tabs)[number];
 
 type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'userNotes'|'optional'|'fixed'|'type'|'estimatedDuration'|'travelMinutes'|'prepBuffer';
@@ -72,6 +72,7 @@ export default function TripApp(){
  const filtered=useMemo(()=>{if(!state)return[];const needle=query.trim().toLowerCase();return state.places.filter(place=>(region==='All'||place.region===region)&&(category==='All'||place.category===category)&&(priority==='All'||place.priority===priority)&&(showVisited||!place.visited)&&(!needle||`${place.name} ${place.notes} ${place.tags.join(' ')}`.toLowerCase().includes(needle)));},[state,query,region,category,priority,showVisited]);
  const nearbySuggestions=useMemo(()=>{if(!state||!currentDay)return[];const rank={must:0,possible:1,backup:2};return state.places.filter(place=>placeMatchesDay(place,currentDay.city,currentDay.date)&&!place.visited).sort((a,b)=>rank[a.priority]-rank[b.priority]).slice(0,6);},[state,currentDay]);
  const assistant=useMemo(()=>state?buildAssistantState(state,now):null,[state,now]);
+ const reservations=useMemo(()=>state?state.days.flatMap(day=>day.items.flatMap(item=>isFixedItem(item)?[{day,item}]:[])):[],[state]);
 
  if(!state)return <main className="shell"><div className="card">Loading trip…</div></main>;
  const completedToday=currentDay?.items.filter(i=>i.done).length??0;
@@ -103,12 +104,58 @@ export default function TripApp(){
     setPriority('All');
     setTab('Places');
    }}/>}
-   {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2></div><span className="chip">{completedTrip}/{tripProgress.length} complete</span></div>{state.days.map((day,di)=><article className="card dayCard" key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>addItem(di)}>+ Add stop</button></div></div>{day.items.map((item,ii)=><div className={`itineraryRow ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor item={item} dayIndex={di} itemIndex={ii} days={state.days} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem}/></div></div>)}</article>)}</section>}
+   {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2></div><span className="chip">{completedTrip}/{tripProgress.length} complete</span></div>{state.days.map((day,di)=><article className="card dayCard" key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>addItem(di)}>+ Add stop</button></div></div>{day.items.map((item,ii)=><div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor item={item} dayIndex={di} itemIndex={ii} days={state.days} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem}/></div></div>)}</article>)}</section>}
+   {tab==='Reservations'&&<ReservationsView reservations={reservations} onShowItem={itemId=>{
+    setTab('Itinerary');
+    window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
+   }}/>}
    {tab==='Food'&&<section><div className="pageIntro"><div><div className="eyebrow">LOCAL FLAVORS</div><h2>Eat the trip</h2></div><span className="chip">{state.foods.filter(i=>i.done).length}/{state.foods.length} tried</span></div>{['Try','Bring home'].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.foods.map((food,index)=>food.category===group&&<label className={`card checkCard ${food.done?'done':''}`} key={food.id}><input type="checkbox" checked={food.done} onChange={()=>toggleList('foods',index)}/><div><h3>{food.title}</h3>{food.notes&&<p className="muted small">{food.notes}</p>}</div></label>)}</div></div>)}</section>}
    {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>Find the right place fast</h2></div><span className="chip">{filtered.length} shown</span></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid"><select className="field" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
    {tab==='Checklist'&&<section><div className="pageIntro"><div><div className="eyebrow">PACK SMART</div><h2>Nothing important left behind</h2></div><span className="chip">{state.packing.filter(i=>i.done).length}/{state.packing.length} packed</span></div>{[...new Set(state.packing.map(i=>i.category))].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.packing.map((item,index)=>item.category===group&&<label className={`card checkCard ${item.done?'done':''}`} key={item.id}><input type="checkbox" checked={item.done} onChange={()=>toggleList('packing',index)}/><div>{item.title}</div></label>)}</div></div>)}</section>}
   </main>
  </>;
+}
+
+type ReservationEntry={
+ day:TripState['days'][number];
+ item:ItineraryItem;
+};
+
+const reservationGroupOrder=['Flights','Hotels','Transportation','Tickets & events','Dining','Reservations'];
+
+function reservationGroup(item:ItineraryItem){
+ const type=inferItemType(item);
+ const text=`${item.title} ${item.details??''}`.toLowerCase();
+ if(type==='hotel')return 'Hotels';
+ if(type==='travel'&&/flight|airport|airline|boarding/.test(text))return 'Flights';
+ if(type==='travel')return 'Transportation';
+ if(/game|ticket|kickoff|museum|tour|tower|aquarium|escape room/.test(text))return 'Tickets & events';
+ if(type==='food')return 'Dining';
+ return 'Reservations';
+}
+
+function ReservationsView({reservations,onShowItem}:{reservations:ReservationEntry[];onShowItem:(itemId:string)=>void}){
+ const groups=reservationGroupOrder.map(name=>({name,items:reservations.filter(entry=>reservationGroup(entry.item)===name)})).filter(group=>group.items.length>0);
+ return <section>
+  <div className="pageIntro"><div><div className="eyebrow">FIXED PLANS</div><h2>Reservations and confirmations</h2><p className="muted">This view updates automatically from fixed itinerary items.</p></div><span className="chip">{reservations.length} fixed plans</span></div>
+  {groups.map(group=><div className="reservationGroup" key={group.name}>
+   <h2 className="sectionTitle">{group.name}</h2>
+   <div className="grid reservationGrid">{group.items.map(({day,item})=>{
+    const keyInfo=item.keyInfo??item.confirmationNumber;
+    return <article className="card reservationCard" key={item.id}>
+     <div className="between reservationTop"><div><div className="eyebrow">{day.label} · {day.city}</div><h3>{item.title}</h3></div><span className="timeBadge">{item.time}</span></div>
+     <div className="reservationMeta"><span className="chip neutral">{inferItemType(item)}</span>{item.estimatedDuration&&<span className="chip neutral">{item.estimatedDuration} min</span>}</div>
+     {item.details&&<p className="muted small">{item.details}</p>}
+     {item.destination&&<div className="reservationSection"><strong>Destination</strong><p>{item.destination}</p></div>}
+     {keyInfo&&<div className="reservationSection keyInfo"><strong>Key Info</strong><p>{keyInfo}</p></div>}
+     {item.userNotes&&<div className="reservationSection"><strong>Notes</strong><p>{item.userNotes}</p></div>}
+     {item.routeText&&<p className="muted small reservationRoute">🚌 {item.routeText}</p>}
+     <div className="placeActions reservationActions">{item.mapUrl&&<a className="btn primary" href={item.mapUrl} target="_blank" rel="noreferrer">Open directions</a>}<button className="btn" onClick={()=>onShowItem(item.id)}>View in itinerary</button></div>
+    </article>;
+   })}</div>
+  </div>)}
+  {reservations.length===0&&<div className="card empty">Mark an itinerary item as a fixed plan to see it here.</div>}
+ </section>;
 }
 
 function ItineraryEditor({item,dayIndex,itemIndex,days,onEdit,onSave,onMove,onReorder,onDelete}:{item:ItineraryItem;dayIndex:number;itemIndex:number;days:TripState['days'];onEdit:(di:number,ii:number,key:EditableKey,value:EditableValue)=>void;onSave:()=>void;onMove:(di:number,ii:number,target:number)=>void;onReorder:(di:number,ii:number,direction:-1|1)=>void;onDelete:(di:number,ii:number)=>void}){
