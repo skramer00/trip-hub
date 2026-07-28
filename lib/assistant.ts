@@ -1,8 +1,8 @@
-import type {ItineraryItem,Place,TripDay,TripState} from '@/lib/types';
+import type {ItineraryItem,ItineraryItemType,Place,TripDay,TripState} from '@/lib/types';
 
 export type AssistantStatus='beforeTrip'|'relax'|'explore'|'leaveSoon'|'leaveNow'|'activity'|'finished';
 export type AssistantNoticeType='info'|'travel'|'timing';
-export type AssistantItemType='reservation'|'activity'|'food'|'travel';
+export type AssistantItemType=ItineraryItemType;
 
 type SmartItineraryItem=ItineraryItem&{
  fixed?:boolean;
@@ -89,6 +89,7 @@ export function inferItemType(item:ItineraryItem):AssistantItemType{
  const smart=item as SmartItineraryItem;
  if(smart.type)return smart.type;
  const text=itemText(item);
+ if(/hotel|check-in|check in|checkout|check-out/.test(text))return 'hotel';
  if(TRAVEL_WORDS.some(word=>text.includes(word)))return 'travel';
  if(FOOD_WORDS.some(word=>text.includes(word)))return 'food';
  if(FIXED_WORDS.some(word=>text.includes(word)))return 'reservation';
@@ -108,6 +109,7 @@ export function estimatedItemDuration(item:ItineraryItem){
  const type=inferItemType(item);
  if(type==='food')return 60;
  if(type==='travel')return 90;
+ if(type==='hotel')return 30;
  if(type==='reservation')return 90;
  return DEFAULT_ACTIVITY_MINUTES;
 }
