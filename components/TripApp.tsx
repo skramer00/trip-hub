@@ -142,7 +142,7 @@ function AssistantView({assistant,tripState,onComplete,onVisited,onShowPlaces}:{
  const [extraMinutes,setExtraMinutes]=useState<number|null>(null);
  const actionItem=assistant.currentActivity??assistant.nextReservation??assistant.nextItem;
  const fixedItem=assistant.nextReservation;
- const extraSuggestions=useMemo(()=>assistant.currentDay&&extraMinutes?findSuggestionCandidates(tripState,assistant.currentDay,extraMinutes,6):[],[assistant.currentDay,extraMinutes,tripState]);
+ const extraSuggestions=useMemo(()=>assistant.currentDay&&extraMinutes?findSuggestionCandidates(tripState,assistant.currentDay,extraMinutes,6,{anchor:assistant.currentActivity}):[],[assistant.currentActivity,assistant.currentDay,extraMinutes,tripState]);
  const displayedSuggestions:SuggestedPlace[]=extraMinutes?extraSuggestions:assistant.suggestions;
  return <section className="assistantPage">
   <div className={`card assistantHero assistant-${assistant.status}`}>
@@ -180,7 +180,7 @@ function AssistantView({assistant,tripState,onComplete,onVisited,onShowPlaces}:{
   </div>}
 
   {displayedSuggestions.length>0&&<section>
-   <div className="pageIntro assistantIntro"><div><div className="eyebrow">{extraMinutes?'EXTRA-TIME IDEAS':'GREAT OPTIONS RIGHT NOW'}</div><h2>{extraMinutes?`Good options for about ${extraMinutes} minutes`:'You have time for something nearby'}</h2><p className="muted">These are options, not obligations. Pick whatever sounds good.</p></div><span className="chip">About {extraMinutes??assistant.availableMinutes} min free</span></div>
+   <div className="pageIntro assistantIntro"><div><div className="eyebrow">{extraMinutes?'EXTRA-TIME IDEAS':'GREAT OPTIONS RIGHT NOW'}</div><h2>{extraMinutes?`Good options for about ${extraMinutes} minutes`:'Options that fit your available time'}</h2><p className="muted">These are varied options from your saved places, not obligations. Pick whatever sounds good.</p></div><span className="chip">About {extraMinutes??assistant.availableMinutes} min free</span></div>
    <div className="grid assistantGrid">{displayedSuggestions.map(suggestion=><article className="card suggestionCard" key={suggestion.place.id}>
     <div className="between"><span className={`priority priority-${suggestion.place.priority}`}>{suggestion.place.priority==='must'?'Must do':suggestion.place.priority}</span><span className="duration">{suggestion.estimatedDuration} min</span></div>
     <h3>{suggestion.place.name}</h3>

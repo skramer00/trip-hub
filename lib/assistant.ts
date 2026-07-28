@@ -16,6 +16,10 @@ type SmartPlace=Place&{
  estimatedDuration?:number;
 };
 
+type SuggestionContext={
+ anchor?:ItineraryItem;
+};
+
 export interface AssistantNotice{
  type:AssistantNoticeType;
  message:string;
@@ -58,6 +62,10 @@ const FIXED_WORDS=[
 
 const FOOD_WORDS=['breakfast','lunch','dinner','brunch','coffee','restaurant','bakery','dessert','food'];
 const TRAVEL_WORDS=['flight','train','bus','shuttle','ferry','airport','travel','transfer','check-in','check in'];
+const CONTEXT_STOP_WORDS=new Set([
+ 'about','after','again','along','and','before','from','head','into','later','near','option',
+ 'then','there','this','through','toward','visit','with','your','toronto','niagara','buffalo','falls'
+]);
 
 function localDateKey(date:Date){
  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
@@ -83,6 +91,26 @@ function minutesBetween(from:Date,to:Date){
 
 function itemText(item:ItineraryItem){
  return `${item.title} ${item.details??''} ${item.keyInfo??''}`.toLowerCase();
+}
+
+function meaningfulTokens(value:string){
+ return [...new Set(value.toLowerCase().match(/[a-z0-9]+/g)??[])]
+  .filter(token=>token.length>=4&&!CONTEXT_STOP_WORDS.has(token));
+}
+
+function placeText(place:Place){
+ return `${place.name} ${place.category} ${place.notes} ${place.tags.join(' ')}`.toLowerCase();
+}
+
+function suggestionFamily(place:Place){
+ const text=placeText(place);
+ if(/bakery|candy|chocolate|dessert|ice cream|sweet/.test(text))return 'dessert';
+ if(/bar|cafe|coffee|diner|food|pizza|restaurant|seafood|steak|taco/.test(text))return 'food';
+ if(/gallery|museum|historic|history|library|theatre|theater/.test(text))return 'culture';
+ if(/garden|island|park|trail|waterfront|viewpoint|falls/.test(text))return 'outdoors';
+ if(/market|mall|shop|shopping|store/.test(text))return 'shopping';
+ if(/station|transit|airport|terminal|bridge/.test(text))return 'transit';
+ return place.category.trim().toLowerCase()||'other';
 }
 
 export function inferItemType(item:ItineraryItem):AssistantItemType{
@@ -157,6 +185,10 @@ export function findNextReservation(day:TripDay,now:Date){
  return scheduledItems(day).find(({item,at})=>!item.done&&isFixedItem(item)&&at>now);
 }
 
+export function findPreviousItem(day:TripDay,now:Date){
+ return scheduledItems(day).filter(({at})=>at<=now).at(-1);
+}
+
 export function calculateLeaveBy(item:ItineraryItem,at:Date){
  const smart=item as SmartItineraryItem;
  const travel=Math.max(0,smart.travelMinutes??DEFAULT_TRAVEL_MINUTES);
@@ -171,7 +203,7 @@ function placeMatchesDay(place:Place,day:TripDay){
  return true;
 }
 
-export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number){
+export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,context:SuggestionContext={}){
  const duration=estimatedPlaceDuration(place);
  const reasons:string[]=[];
  let score=0;
@@ -179,24 +211,48 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number)
  if(place.priority==='must'){score+=40;reasons.push('One of your Must Do places');}
  else if(place.priority==='possible'){score+=20;reasons.push('A saved option you were considering');}
  else {score+=5;reasons.push('A useful backup option');}
- if(place.recommendedDates?.includes(day.date)){score+=25;reasons.push('Recommended for this day');}
+ if(place.recommendedDates?.includes(day.date)){score+=30;reasons.push('Recommended for this day');}
  if(placeMatchesDay(place,day)){score+=15;reasons.push(`Fits your ${day.city} plans`);}
+ if(context.anchor){
+  const anchorTokens=meaningfulTokens(`${context.anchor.title} ${context.anchor.destination??''} ${context.anchor.details??''}`);
+  const candidateText=placeText(place);
+  const overlap=anchorTokens.filter(token=>candidateText.includes(token)).length;
+  if(overlap>0){
+   score+=Math.min(20,overlap*8);
+   reasons.push(`Matches your ${context.anchor.title} plans`);
+  }
+ }
  if(availableMinutes>=duration+15){score+=30;reasons.push('Fits comfortably before your next scheduled event');}
  else if(availableMinutes>=duration){score+=15;reasons.push('Fits within the available time');}
  else {score-=40;reasons.push('May be tight for the available time');}
  return {score,reasons,duration};
 }
 
-export function findSuggestionCandidates(state:TripState,day:TripDay,availableMinutes:number,limit=3):SuggestedPlace[]{
- return state.places
+export function findSuggestionCandidates(state:TripState,day:TripDay,availableMinutes:number,limit=3,context:SuggestionContext={}):SuggestedPlace[]{
+ const ranked=state.places
   .filter(place=>!place.visited&&placeMatchesDay(place,day))
   .map(place=>{
-   const ranked=scoreSuggestion(place,day,availableMinutes);
-   return {place,score:ranked.score,reasons:ranked.reasons,reason:ranked.reasons.join(' • '),estimatedDuration:ranked.duration};
+   const result=scoreSuggestion(place,day,availableMinutes,context);
+   return {place,score:result.score,reasons:result.reasons,reason:result.reasons.join(' • '),estimatedDuration:result.duration};
   })
   .filter(item=>item.score>0&&item.estimatedDuration<=Math.max(availableMinutes,30))
-  .sort((a,b)=>b.score-a.score||a.estimatedDuration-b.estimatedDuration)
-  .slice(0,limit);
+  .sort((a,b)=>b.score-a.score||a.estimatedDuration-b.estimatedDuration||a.place.name.localeCompare(b.place.name));
+
+ const selected:SuggestedPlace[]=[];
+ const usedFamilies=new Set<string>();
+ for(const suggestion of ranked){
+  const family=suggestionFamily(suggestion.place);
+  if(usedFamilies.has(family))continue;
+  selected.push(suggestion);
+  usedFamilies.add(family);
+  if(selected.length===limit)return selected;
+ }
+ for(const suggestion of ranked){
+  if(selected.some(item=>item.place.id===suggestion.place.id))continue;
+  selected.push(suggestion);
+  if(selected.length===limit)break;
+ }
+ return selected;
 }
 
 function greeting(now:Date){
@@ -248,12 +304,13 @@ export function buildAssistantState(state:TripState,now=new Date()):AssistantSta
  const current=findCurrentActivity(day,now);
  const next=findNextItem(day,now);
  const reservation=findNextReservation(day,now);
+ const previous=findPreviousItem(day,now);
  const leaveBy=reservation?calculateLeaveBy(reservation.item,reservation.at):undefined;
  const availableMinutes=leaveBy?Math.max(0,minutesBetween(now,leaveBy)):next?Math.max(0,minutesBetween(now,next.at)):0;
  const remaining=day.items.filter(item=>!item.done);
  const allRemainingFlexible=remaining.length>0&&remaining.every(item=>!isFixedItem(item));
  const presentation=buildPresentation({now,day,current,next,reservation,leaveBy,availableMinutes,allRemainingFlexible});
- const suggestions=(presentation.status==='explore'||presentation.status==='relax')&&availableMinutes>=30?findSuggestionCandidates(state,day,availableMinutes):[];
+ const suggestions=(presentation.status==='explore'||presentation.status==='relax')&&availableMinutes>=30?findSuggestionCandidates(state,day,availableMinutes,3,{anchor:current?.item??previous?.item}):[];
  return {
   currentDay:day,
   currentDayIndex:found.index,
