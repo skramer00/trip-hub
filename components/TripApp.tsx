@@ -5,7 +5,7 @@ import {buildAssistantState,estimatedItemDuration,findSuggestionCandidates,infer
 import type {AssistantState,SuggestedPlace} from '@/lib/assistant';
 import type {ItineraryItem,Place,TripState} from '@/lib/types';
 
-const tabs=['Today','Assistant','Itinerary','Reservations','Food','Places','Checklist'] as const;
+const tabs=['Today','Assistant','Board','Itinerary','Reservations','Food','Places','Checklist'] as const;
 type Tab=(typeof tabs)[number];
 type InstallPromptEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
 
@@ -74,6 +74,7 @@ export default function TripApp(){
  const [offlineReady,setOfflineReady]=useState(false);
  const [offlineDownloading,setOfflineDownloading]=useState(false);
  const [installPrompt,setInstallPrompt]=useState<InstallPromptEvent|null>(null);
+ const [boardUndo,setBoardUndo]=useState<TripState|null>(null);
 
  useEffect(()=>{
   let active=true;
@@ -179,6 +180,37 @@ export default function TripApp(){
  function deleteItem(di:number,ii:number){if(!state||!window.confirm(`Delete “${state.days[di].items[ii].title}”?`))return;const next=structuredClone(state);next.days[di].items.splice(ii,1);void persist(next);}
  function moveItem(di:number,ii:number,target:number){if(!state||target===di)return;const next=structuredClone(state);const [item]=next.days[di].items.splice(ii,1);next.days[target].items.push(item);next.days[target].items=sortItems(next.days[target].items);void persist(next);}
  function reorderItem(di:number,ii:number,direction:-1|1){if(!state)return;const target=ii+direction;if(target<0||target>=state.days[di].items.length)return;const next=structuredClone(state);[next.days[di].items[ii],next.days[di].items[target]]=[next.days[di].items[target],next.days[di].items[ii]];void persist(next);}
+ function moveBoardItem(fromDay:number,fromIndex:number,toDay:number,toIndex:number){
+  if(!state)return;
+  const next=structuredClone(state);
+  const [item]=next.days[fromDay].items.splice(fromIndex,1);
+  const adjustedIndex=fromDay===toDay&&fromIndex<toIndex?toIndex-1:toIndex;
+  next.days[toDay].items.splice(Math.max(0,Math.min(adjustedIndex,next.days[toDay].items.length)),0,item);
+  setBoardUndo(structuredClone(state));
+  void persist(next);
+ }
+ function duplicateBoardItem(di:number,ii:number){
+  if(!state)return;
+  const next=structuredClone(state);
+  const copy=structuredClone(next.days[di].items[ii]);
+  copy.id=`copy-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  copy.title=`${copy.title} (copy)`;
+  copy.done=false;
+  next.days[di].items.splice(ii+1,0,copy);
+  setBoardUndo(structuredClone(state));
+  void persist(next);
+ }
+ function addBoardItem(di:number){
+  if(!state)return;
+  setBoardUndo(structuredClone(state));
+  addItem(di);
+ }
+ function undoBoardChange(){
+  if(!boardUndo||!state)return;
+  const previous=structuredClone(boardUndo);
+  setBoardUndo(structuredClone(state));
+  void persist(previous);
+ }
  function toggleList(key:'foods'|'packing',index:number){if(!state)return;const next=structuredClone(state);next[key][index].done=!next[key][index].done;void persist(next);}
  function toggleVisited(id:string){if(!state)return;const next=structuredClone(state);const place=next.places.find(p=>p.id===id);if(place)place.visited=!place.visited;void persist(next);}
 
@@ -222,6 +254,10 @@ export default function TripApp(){
     setPriority('All');
     setTab('Places');
    }}/>}
+   {tab==='Board'&&<TripBoard days={state.days} canUndo={Boolean(boardUndo)} onUndo={undoBoardChange} onMove={moveBoardItem} onDuplicate={duplicateBoardItem} onAdd={addBoardItem} onToggle={toggleDay} onOpenItem={itemId=>{
+    setTab('Itinerary');
+    window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
+   }}/>}
    {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2></div><span className="chip">{completedTrip}/{tripProgress.length} complete</span></div>{state.days.map((day,di)=><article className="card dayCard" key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>addItem(di)}>+ Add stop</button></div></div>{day.items.map((item,ii)=><div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor item={item} dayIndex={di} itemIndex={ii} days={state.days} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem}/></div></div>)}</article>)}</section>}
    {tab==='Reservations'&&<ReservationsView reservations={reservations} onShowItem={itemId=>{
     setTab('Itinerary');
@@ -232,6 +268,46 @@ export default function TripApp(){
    {tab==='Checklist'&&<section><div className="pageIntro"><div><div className="eyebrow">PACK SMART</div><h2>Nothing important left behind</h2></div><span className="chip">{state.packing.filter(i=>i.done).length}/{state.packing.length} packed</span></div>{[...new Set(state.packing.map(i=>i.category))].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.packing.map((item,index)=>item.category===group&&<label className={`card checkCard ${item.done?'done':''}`} key={item.id}><input type="checkbox" checked={item.done} onChange={()=>toggleList('packing',index)}/><div>{item.title}</div></label>)}</div></div>)}</section>}
   </main>
  </>;
+}
+
+type DragPosition={dayIndex:number;itemIndex:number};
+
+function TripBoard({days,canUndo,onUndo,onMove,onDuplicate,onAdd,onToggle,onOpenItem}:{days:TripState['days'];canUndo:boolean;onUndo:()=>void;onMove:(fromDay:number,fromIndex:number,toDay:number,toIndex:number)=>void;onDuplicate:(dayIndex:number,itemIndex:number)=>void;onAdd:(dayIndex:number)=>void;onToggle:(dayIndex:number,itemIndex:number)=>void;onOpenItem:(itemId:string)=>void}){
+ const [dragging,setDragging]=useState<DragPosition|null>(null);
+ const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
+ function dropAt(event:React.DragEvent,toDay:number,toIndex:number){
+  event.preventDefault();
+  if(dragging)onMove(dragging.dayIndex,dragging.itemIndex,toDay,toIndex);
+  setDragging(null);
+ }
+ function toggleCollapsed(date:string){
+  setCollapsed(current=>{
+   const next=new Set(current);
+   if(next.has(date))next.delete(date);else next.add(date);
+   return next;
+  });
+ }
+ return <section className="boardBreakout">
+  <div className="pageIntro boardIntro"><div><div className="eyebrow">TRIP BOARD</div><h2>Build the whole trip at a glance</h2><p className="muted">Drag cards within a day or across days. Use the card controls when you’re on a phone.</p></div><div className="placeActions"><button className="btn" onClick={onUndo} disabled={!canUndo}>↶ Undo</button><span className="chip">{days.length} days</span></div></div>
+  <div className="tripBoard" aria-label="Trip itinerary board">
+   {days.map((day,di)=>{
+    const isCollapsed=collapsed.has(day.date);
+    return <article className={`boardColumn ${isCollapsed?'collapsed':''}`} key={day.date} onDragOver={event=>event.preventDefault()} onDrop={event=>dropAt(event,di,day.items.length)}>
+     <header className="boardColumnHeader"><button className="boardCollapse" onClick={()=>toggleCollapsed(day.date)} aria-expanded={!isCollapsed} aria-label={`${isCollapsed?'Expand':'Collapse'} ${day.label}`}>{isCollapsed?'▸':'▾'}</button><div><div className="eyebrow">{day.date}</div><h3>{day.label}</h3><p>{day.city}</p></div><span className="chip neutral">{day.items.length}</span></header>
+     {!isCollapsed&&<div className="boardCards">
+      {day.items.map((item,ii)=><article className={`boardCard ${item.done?'complete':''} ${dragging?.dayIndex===di&&dragging.itemIndex===ii?'dragging':''}`} draggable onDragStart={event=>{setDragging({dayIndex:di,itemIndex:ii});event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',item.id);}} onDragEnd={()=>setDragging(null)} onDragOver={event=>event.preventDefault()} onDrop={event=>{event.stopPropagation();dropAt(event,di,ii);}} key={item.id}>
+       <div className="boardCardTop"><button className="dragHandle" aria-label={`Drag ${item.title}`} title="Drag to move">⋮⋮</button><span className="boardTime">{item.time}</span><label className="boardCheck"><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>onToggle(di,ii)}/></label></div>
+       <button className="boardCardTitle" onClick={()=>onOpenItem(item.id)}>{item.title}</button>
+       {item.destination&&<p className="boardDestination">{item.destination}</p>}
+       <div className="boardBadges"><span className={`chip ${isFixedItem(item)?'':'neutral'}`}>{isFixedItem(item)?'Fixed':'Flexible'}</span>{item.optional&&<span className="chip neutral">Optional</span>}</div>
+       <div className="boardCardActions"><button onClick={()=>ii>0&&onMove(di,ii,di,ii-1)} disabled={ii===0} aria-label={`Move ${item.title} up`}>↑</button><button onClick={()=>ii<day.items.length-1&&onMove(di,ii,di,ii+2)} disabled={ii===day.items.length-1} aria-label={`Move ${item.title} down`}>↓</button><select aria-label={`Move ${item.title} to another day`} value={di} onChange={event=>onMove(di,ii,Number(event.target.value),days[Number(event.target.value)].items.length)}>{days.map((target,targetIndex)=><option value={targetIndex} key={target.date}>{target.label}</option>)}</select><button onClick={()=>onDuplicate(di,ii)} aria-label={`Duplicate ${item.title}`}>⧉</button></div>
+      </article>)}
+      <button className="boardAdd" onClick={()=>onAdd(di)}>+ Add stop</button>
+     </div>}
+    </article>;
+   })}
+  </div>
+ </section>;
 }
 
 type ReservationEntry={
