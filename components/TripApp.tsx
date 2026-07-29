@@ -1,9 +1,9 @@
 'use client';
 
 import {useEffect,useMemo,useState} from 'react';
-import {buildAssistantState,estimatedItemDuration,findSuggestionCandidates,inferItemType,isFixedItem} from '@/lib/assistant';
+import {buildAssistantState,estimatedItemDuration,findSuggestionCandidates,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
 import type {AssistantState,SuggestedPlace} from '@/lib/assistant';
-import type {ItineraryItem,Place,TripState} from '@/lib/types';
+import type {ItineraryItem,Place,TripState,Weekday} from '@/lib/types';
 
 const tabs=['Today','Assistant','Board','Itinerary','Reservations','Food','Places','Checklist'] as const;
 type Tab=(typeof tabs)[number];
@@ -213,6 +213,57 @@ export default function TripApp(){
  }
  function toggleList(key:'foods'|'packing',index:number){if(!state)return;const next=structuredClone(state);next[key][index].done=!next[key][index].done;void persist(next);}
  function toggleVisited(id:string){if(!state)return;const next=structuredClone(state);const place=next.places.find(p=>p.id===id);if(place)place.visited=!place.visited;void persist(next);}
+ function editPlace(id:string,changes:Partial<Place>){
+  if(!state)return;
+  const next=structuredClone(state);
+  const place=next.places.find(candidate=>candidate.id===id);
+  if(!place)return;
+  Object.assign(place,changes);
+  setState(next);
+  localStorage.setItem(localStateKey,JSON.stringify(next));
+ }
+ function editPlaceHours(id:string,day:Weekday,changes:{open?:string;close?:string;closed?:boolean}){
+  if(!state)return;
+  const next=structuredClone(state);
+  const place=next.places.find(candidate=>candidate.id===id);
+  if(!place)return;
+  place.weeklyHours??={};
+  const current=place.weeklyHours[day]??{open:'09:00',close:'17:00',closed:false};
+  place.weeklyHours[day]={...current,...changes};
+  setState(next);
+  localStorage.setItem(localStateKey,JSON.stringify(next));
+ }
+ function savePlaceChanges(){const latest=readLocalState()??state;if(latest)void persist(structuredClone(latest));}
+ function addPlace(){
+  if(!state)return;
+  const next=structuredClone(state);
+  next.places.unshift({id:`place-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,name:'New place',region:'Toronto',category:'Attraction',notes:'',mapUrl:'',menuUrl:'',websiteUrl:'',tags:[],priority:'possible',visited:false,estimatedDuration:60});
+  void persist(next);
+  setQuery('New place');
+  setRegion('All');
+  setCategory('All');
+  setPriority('All');
+ }
+ function duplicatePlace(id:string){
+  if(!state)return;
+  const next=structuredClone(state);
+  const index=next.places.findIndex(place=>place.id===id);
+  if(index<0)return;
+  const copy=structuredClone(next.places[index]);
+  copy.id=`place-copy-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  copy.name=`${copy.name} (copy)`;
+  copy.visited=false;
+  next.places.splice(index+1,0,copy);
+  void persist(next);
+ }
+ function deletePlace(id:string){
+  if(!state)return;
+  const place=state.places.find(candidate=>candidate.id===id);
+  if(!place||!window.confirm(`Delete “${place.name}”?`))return;
+  const next=structuredClone(state);
+  next.places=next.places.filter(candidate=>candidate.id!==id);
+  void persist(next);
+ }
 
  const currentDayIndex=useMemo(()=>(state?activeDayIndex(state.days):0),[state]);
  const currentDay=state?.days[currentDayIndex];
@@ -243,7 +294,7 @@ export default function TripApp(){
     <div className="between sectionHeading"><h2 className="sectionTitle">Recommended for this day</h2><button className="textButton" onClick={()=>{setRegion(currentDay.city.includes('Toronto')?'Toronto':'Niagara & Buffalo');setTab('Places');}}>See all</button></div>
     <div className="grid compactGrid">{nearbySuggestions.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>
    </section>}
-   {tab==='Assistant'&&assistant&&<AssistantView assistant={assistant} tripState={state} onComplete={item=>{
+   {tab==='Assistant'&&assistant&&<AssistantView assistant={assistant} tripState={state} now={now} onComplete={item=>{
     const day=state.days[assistant.currentDayIndex];
     const itemIndex=day?.items.findIndex(candidate=>candidate.id===item.id)??-1;
     if(itemIndex>=0)toggleDay(assistant.currentDayIndex,itemIndex);
@@ -264,7 +315,7 @@ export default function TripApp(){
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
    {tab==='Food'&&<section><div className="pageIntro"><div><div className="eyebrow">LOCAL FLAVORS</div><h2>Eat the trip</h2></div><span className="chip">{state.foods.filter(i=>i.done).length}/{state.foods.length} tried</span></div>{['Try','Bring home'].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.foods.map((food,index)=>food.category===group&&<label className={`card checkCard ${food.done?'done':''}`} key={food.id}><input type="checkbox" checked={food.done} onChange={()=>toggleList('foods',index)}/><div><h3>{food.title}</h3>{food.notes&&<p className="muted small">{food.notes}</p>}</div></label>)}</div></div>)}</section>}
-   {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>Find the right place fast</h2></div><span className="chip">{filtered.length} shown</span></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid"><select className="field" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
+   {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>Find and manage places</h2></div><div className="placeActions"><span className="chip">{filtered.length} shown</span><button className="btn primary" onClick={addPlace}>+ Add place</button></div></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid"><select className="field" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)} onEdit={changes=>editPlace(place.id,changes)} onEditHours={(day,changes)=>editPlaceHours(place.id,day,changes)} onSave={savePlaceChanges} onDuplicate={()=>duplicatePlace(place.id)} onDelete={()=>deletePlace(place.id)} tripDates={state.days}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
    {tab==='Checklist'&&<section><div className="pageIntro"><div><div className="eyebrow">PACK SMART</div><h2>Nothing important left behind</h2></div><span className="chip">{state.packing.filter(i=>i.done).length}/{state.packing.length} packed</span></div>{[...new Set(state.packing.map(i=>i.category))].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.packing.map((item,index)=>item.category===group&&<label className={`card checkCard ${item.done?'done':''}`} key={item.id}><input type="checkbox" checked={item.done} onChange={()=>toggleList('packing',index)}/><div>{item.title}</div></label>)}</div></div>)}</section>}
   </main>
  </>;
@@ -427,11 +478,11 @@ function statusLabel(status:AssistantState['status']){
  return 'Plenty of flexibility';
 }
 
-function AssistantView({assistant,tripState,onComplete,onVisited,onShowPlaces}:{assistant:AssistantState;tripState:TripState;onComplete:(item:ItineraryItem)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void}){
+function AssistantView({assistant,tripState,now,onComplete,onVisited,onShowPlaces}:{assistant:AssistantState;tripState:TripState;now:Date;onComplete:(item:ItineraryItem)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void}){
  const [extraMinutes,setExtraMinutes]=useState<number|null>(null);
  const actionItem=assistant.currentActivity??assistant.nextReservation??assistant.nextItem;
  const fixedItem=assistant.nextReservation;
- const extraSuggestions=useMemo(()=>assistant.currentDay&&extraMinutes?findSuggestionCandidates(tripState,assistant.currentDay,extraMinutes,6,{anchor:assistant.currentActivity}):[],[assistant.currentActivity,assistant.currentDay,extraMinutes,tripState]);
+ const extraSuggestions=useMemo(()=>assistant.currentDay&&extraMinutes?findSuggestionCandidates(tripState,assistant.currentDay,extraMinutes,6,{anchor:assistant.currentActivity,now}):[],[assistant.currentActivity,assistant.currentDay,extraMinutes,now,tripState]);
  const displayedSuggestions:SuggestedPlace[]=extraMinutes?extraSuggestions:assistant.suggestions;
  return <section className="assistantPage">
   <div className={`card assistantHero assistant-${assistant.status}`}>
@@ -485,6 +536,52 @@ function AssistantView({assistant,tripState,onComplete,onVisited,onShowPlaces}:{
  </section>;
 }
 
-function PlaceCard({place,onToggle}:{place:Place;onToggle:()=>void}){
- return <article className={`card placeCard ${place.visited?'visited':''}`}><div className="between"><span className={`priority priority-${place.priority}`}>{place.priority==='must'?'Must do':place.priority}</span><button className="visitedButton" onClick={onToggle}>{place.visited?'✓ Visited':'Mark visited'}</button></div><h3>{place.name}</h3><div className="muted small">{place.region} · {place.category}</div>{place.notes&&<p>{place.notes}</p>}{place.tags.length>0&&<div className="tagRow">{place.tags.slice(0,4).map(tag=><span className="chip neutral" key={tag}>{tag}</span>)}</div>}<div className="placeActions"><a className="btn primary" href={place.mapUrl} target="_blank" rel="noreferrer">Directions</a>{place.menuUrl&&<a className="btn" href={place.menuUrl} target="_blank" rel="noreferrer">Menu</a>}{place.websiteUrl&&<a className="btn" href={place.websiteUrl} target="_blank" rel="noreferrer">Website</a>}</div></article>;
+const placeWeekdays:[Weekday,string][]=[['monday','Mon'],['tuesday','Tue'],['wednesday','Wed'],['thursday','Thu'],['friday','Fri'],['saturday','Sat'],['sunday','Sun']];
+
+function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onDuplicate,onDelete,tripDates}:{place:Place;onToggle:()=>void;onEdit?:(changes:Partial<Place>)=>void;onEditHours?:(day:Weekday,changes:{open?:string;close?:string;closed?:boolean})=>void;onSave?:()=>void;onDuplicate?:()=>void;onDelete?:()=>void;tripDates?:TripState['days']}){
+ const [editing,setEditing]=useState(false);
+ const [saved,setSaved]=useState(false);
+ const hoursCount=Object.keys(place.weeklyHours??{}).length;
+ const openStatus=placeOpenStatus(place,new Date());
+ function save(){
+  onSave?.();
+  setSaved(true);
+  window.setTimeout(()=>setSaved(false),1800);
+ }
+ function edit(changes:Partial<Place>,saveImmediately=false){
+  onEdit?.(changes);
+  if(saveImmediately)window.setTimeout(save,0);
+ }
+ return <article className={`card placeCard ${place.visited?'visited':''} ${editing?'editing':''}`}>
+  <div className="between"><span className={`priority priority-${place.priority}`}>{place.priority==='must'?'Must do':place.priority}</span><button className="visitedButton" onClick={onToggle}>{place.visited?'✓ Visited':'Mark visited'}</button></div>
+  <h3>{place.name}</h3>
+  <div className="muted small">{place.region} · {place.category}</div>
+  {hoursCount>0?<div className={`hoursStatus hours-${openStatus.status}`}>{openStatus.status==='open'?'Open now':openStatus.status==='closed'?'Closed now':'Hours added'}{place.hoursVerifiedAt?` · verified ${place.hoursVerifiedAt}`:' · not verified'}</div>:<div className="hoursStatus hours-unknown">Hours not added</div>}
+  {place.notes&&<p>{place.notes}</p>}
+  {place.tags.length>0&&<div className="tagRow">{place.tags.slice(0,4).map(tag=><span className="chip neutral" key={tag}>{tag}</span>)}</div>}
+  <div className="placeActions"><a className="btn primary" href={place.mapUrl||`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}`} target="_blank" rel="noreferrer">Directions</a>{place.menuUrl&&<a className="btn" href={place.menuUrl} target="_blank" rel="noreferrer">Menu</a>}{place.websiteUrl&&<a className="btn" href={place.websiteUrl} target="_blank" rel="noreferrer">Website</a>}{onEdit&&<button className="btn" onClick={()=>setEditing(value=>!value)}>{editing?'Close editor':'Edit place'}</button>}</div>
+  {editing&&onEdit&&onEditHours&&<div className="placeEditor">
+   <div className="placeEditorGrid">
+    <label>Name<input className="field" value={place.name} onChange={event=>edit({name:event.target.value})} onBlur={save}/></label>
+    <label>Category<input className="field" value={place.category} onChange={event=>edit({category:event.target.value})} onBlur={save}/></label>
+    <label>Region<select className="field" value={place.region} onChange={event=>edit({region:event.target.value},true)}><option>Toronto</option><option>Niagara & Buffalo</option></select></label>
+    <label>Priority<select className="field" value={place.priority} onChange={event=>edit({priority:event.target.value as Place['priority']},true)}><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></label>
+    <label>Visit time (minutes)<input className="field" type="number" min="5" step="5" value={place.estimatedDuration??60} onChange={event=>edit({estimatedDuration:Number(event.target.value)})} onBlur={save}/></label>
+    <label>Time zone<input className="field" value={place.hoursTimeZone??'America/Toronto'} onChange={event=>edit({hoursTimeZone:event.target.value})} onBlur={save}/></label>
+   </div>
+   <label>Notes<textarea className="field" rows={3} value={place.notes} onChange={event=>edit({notes:event.target.value})} onBlur={save}/></label>
+   <div className="placeEditorGrid links">
+    <label>Google Maps URL<input className="field" value={place.mapUrl} onChange={event=>edit({mapUrl:event.target.value})} onBlur={save}/></label>
+    <label>Menu URL<input className="field" value={place.menuUrl} onChange={event=>edit({menuUrl:event.target.value})} onBlur={save}/></label>
+    <label>Website URL<input className="field" value={place.websiteUrl} onChange={event=>edit({websiteUrl:event.target.value})} onBlur={save}/></label>
+    <label>Tags<input className="field" value={place.tags.join(', ')} onChange={event=>edit({tags:event.target.value.split(',').map(tag=>tag.trim()).filter(Boolean)})} onBlur={save}/></label>
+   </div>
+   {tripDates&&<fieldset className="recommendedDates"><legend>Recommended trip days</legend><div>{tripDates.map(day=><label className="toggleLine" key={day.date}><input type="checkbox" checked={place.recommendedDates?.includes(day.date)??false} onChange={event=>{const dates=new Set(place.recommendedDates??[]);if(event.target.checked)dates.add(day.date);else dates.delete(day.date);edit({recommendedDates:[...dates]},true);}}/> {day.label}</label>)}</div></fieldset>}
+   <div className="hoursEditor">
+    <div className="between"><div><strong>Weekly hours</strong><p className="muted small">Used to prevent closed-place suggestions.</p></div><button className="btn" onClick={()=>edit({hoursVerifiedAt:new Date().toISOString().slice(0,10)},true)}>Mark verified today</button></div>
+    {placeWeekdays.map(([day,label])=>{const hours=place.weeklyHours?.[day]??{open:'09:00',close:'17:00',closed:false};return <div className="hoursRow" key={day}><strong>{label}</strong><input className="field" type="time" value={hours.open} disabled={hours.closed} onChange={event=>onEditHours(day,{open:event.target.value})} onBlur={save}/><span>to</span><input className="field" type="time" value={hours.close} disabled={hours.closed} onChange={event=>onEditHours(day,{close:event.target.value})} onBlur={save}/><label className="toggleLine"><input type="checkbox" checked={Boolean(hours.closed)} onChange={event=>{onEditHours(day,{closed:event.target.checked});window.setTimeout(save,0);}}/> Closed</label></div>;})}
+   </div>
+   <div className="editorFooter"><div className="placeActions"><button className="btn" onClick={onDuplicate}>Duplicate</button><button className="btn danger" onClick={onDelete}>Delete place</button></div><div className="saveArea"><span className={`saveStatus ${saved?'visible':''}`} role="status">Saved</span><button className="btn primary" onClick={save}>Save changes</button></div></div>
+  </div>}
+ </article>;
 }

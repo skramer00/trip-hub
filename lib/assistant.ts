@@ -1,4 +1,4 @@
-import type {ItineraryItem,ItineraryItemType,Place,TripDay,TripState} from '@/lib/types';
+import type {ItineraryItem,ItineraryItemType,Place,TripDay,TripState,Weekday} from '@/lib/types';
 
 export type AssistantStatus='beforeTrip'|'relax'|'explore'|'leaveSoon'|'leaveNow'|'activity'|'finished';
 export type AssistantNoticeType='info'|'travel'|'timing';
@@ -18,6 +18,7 @@ type SmartPlace=Place&{
 
 type SuggestionContext={
  anchor?:ItineraryItem;
+ now?:Date;
 };
 
 export interface AssistantNotice{
@@ -53,6 +54,7 @@ export interface AssistantState{
 const DEFAULT_PREP_BUFFER=15;
 const DEFAULT_TRAVEL_MINUTES=20;
 const DEFAULT_ACTIVITY_MINUTES=60;
+const WEEKDAYS:Weekday[]=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
 
 const FIXED_WORDS=[
  'flight','depart','arrival','arrive','train','via rail','go train','bus','shuttle','ferry',
@@ -153,6 +155,36 @@ function estimatedPlaceDuration(place:Place){
  return 60;
 }
 
+function clockMinutes(value:string){
+ const match=value.match(/^(\d{1,2}):(\d{2})$/);
+ if(!match)return undefined;
+ return Number(match[1])*60+Number(match[2]);
+}
+
+export function placeOpenStatus(place:Place,now:Date){
+ let weekday=WEEKDAYS[now.getDay()];
+ let current=now.getHours()*60+now.getMinutes();
+ try{
+  const parts=new Intl.DateTimeFormat('en-US',{timeZone:place.hoursTimeZone??'America/Toronto',weekday:'long',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(now);
+  const weekdayName=parts.find(part=>part.type==='weekday')?.value.toLowerCase() as Weekday|undefined;
+  const hour=Number(parts.find(part=>part.type==='hour')?.value);
+  const minute=Number(parts.find(part=>part.type==='minute')?.value);
+  if(weekdayName&&WEEKDAYS.includes(weekdayName))weekday=weekdayName;
+  if(Number.isFinite(hour)&&Number.isFinite(minute))current=hour*60+minute;
+ }catch{}
+ const hours=place.weeklyHours?.[weekday];
+ if(!hours)return {status:'unknown' as const};
+ if(hours.closed)return {status:'closed' as const};
+ const open=clockMinutes(hours.open);
+ const close=clockMinutes(hours.close);
+ if(open===undefined||close===undefined)return {status:'unknown' as const};
+ const overnight=close<=open;
+ const openNow=overnight?current>=open||current<close:current>=open&&current<close;
+ if(!openNow)return {status:'closed' as const};
+ const minutesUntilClose=overnight?(current>=open?24*60-current+close:close-current):close-current;
+ return {status:'open' as const,minutesUntilClose};
+}
+
 export function findCurrentDay(state:TripState,now:Date){
  const key=localDateKey(now);
  const exact=state.days.findIndex(day=>day.date===key);
@@ -208,6 +240,12 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
  const reasons:string[]=[];
  let score=0;
  if(place.visited)return {score:-1000,reasons,duration};
+ if(context.now){
+  const openStatus=placeOpenStatus(place,context.now);
+  if(openStatus.status==='closed')return {score:-1000,reasons:['Closed at this time'],duration};
+  if(openStatus.status==='open'&&openStatus.minutesUntilClose<duration)return {score:-1000,reasons:['Closes too soon for the estimated visit'],duration};
+  if(openStatus.status==='open'){score+=12;reasons.push('Open during this window');}
+ }
  if(place.priority==='must'){score+=40;reasons.push('One of your Must Do places');}
  else if(place.priority==='possible'){score+=20;reasons.push('A saved option you were considering');}
  else {score+=5;reasons.push('A useful backup option');}
@@ -310,7 +348,7 @@ export function buildAssistantState(state:TripState,now=new Date()):AssistantSta
  const remaining=day.items.filter(item=>!item.done);
  const allRemainingFlexible=remaining.length>0&&remaining.every(item=>!isFixedItem(item));
  const presentation=buildPresentation({now,day,current,next,reservation,leaveBy,availableMinutes,allRemainingFlexible});
- const suggestions=(presentation.status==='explore'||presentation.status==='relax')&&availableMinutes>=30?findSuggestionCandidates(state,day,availableMinutes,3,{anchor:current?.item??previous?.item}):[];
+ const suggestions=(presentation.status==='explore'||presentation.status==='relax')&&availableMinutes>=30?findSuggestionCandidates(state,day,availableMinutes,3,{anchor:current?.item??previous?.item,now}):[];
  return {
   currentDay:day,
   currentDayIndex:found.index,
