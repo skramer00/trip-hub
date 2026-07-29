@@ -175,7 +175,7 @@ export default function TripApp(){
  }
  function toggleDay(di:number,ii:number){if(!state)return;const next=structuredClone(state);next.days[di].items[ii].done=!next.days[di].items[ii].done;void persist(next);}
  function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='fixed')item[key]=Boolean(value);else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
- function saveEdits(di?:number){if(!state)return;const next=structuredClone(state);if(di!==undefined)next.days[di].items=sortItems(next.days[di].items);void persist(next);}
+ function saveEdits(di?:number){const latest=readLocalState()??state;if(!latest)return;const next=structuredClone(latest);if(di!==undefined)next.days[di].items=sortItems(next.days[di].items);void persist(next);}
  function addItem(di:number){if(!state)return;const next=structuredClone(state);next.days[di].items.push({id:`custom-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:'12:00 PM',title:'New stop',details:'',destination:'',routeText:'',keyInfo:'',userNotes:'',done:false,optional:false,fixed:false,type:'activity',estimatedDuration:60,travelMinutes:20,prepBuffer:15});next.days[di].items=sortItems(next.days[di].items);void persist(next);}
  function deleteItem(di:number,ii:number){if(!state||!window.confirm(`Delete “${state.days[di].items[ii].title}”?`))return;const next=structuredClone(state);next.days[di].items.splice(ii,1);void persist(next);}
  function moveItem(di:number,ii:number,target:number){if(!state||target===di)return;const next=structuredClone(state);const [item]=next.days[di].items.splice(ii,1);next.days[target].items.push(item);next.days[target].items=sortItems(next.days[target].items);void persist(next);}
@@ -295,13 +295,13 @@ function TripBoard({days,canUndo,onUndo,onMove,onDuplicate,onAdd,onToggle,onOpen
     return <article className={`boardColumn ${isCollapsed?'collapsed':''}`} key={day.date} onDragOver={event=>event.preventDefault()} onDrop={event=>dropAt(event,di,day.items.length)}>
      <header className="boardColumnHeader"><button className="boardCollapse" onClick={()=>toggleCollapsed(day.date)} aria-expanded={!isCollapsed} aria-label={`${isCollapsed?'Expand':'Collapse'} ${day.label}`}>{isCollapsed?'▸':'▾'}</button><div><div className="eyebrow">{day.date}</div><h3>{day.label}</h3><p>{day.city}</p></div><span className="chip neutral">{day.items.length}</span></header>
      {!isCollapsed&&<div className="boardCards">
-      {day.items.map((item,ii)=><article className={`boardCard ${item.done?'complete':''} ${dragging?.dayIndex===di&&dragging.itemIndex===ii?'dragging':''}`} draggable onDragStart={event=>{setDragging({dayIndex:di,itemIndex:ii});event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',item.id);}} onDragEnd={()=>setDragging(null)} onDragOver={event=>event.preventDefault()} onDrop={event=>{event.stopPropagation();dropAt(event,di,ii);}} key={item.id}>
+      {day.items.map((item,ii)=>{const boardType=inferItemType(item);return <article className={`boardCard board-${boardType} ${item.done?'complete':''} ${dragging?.dayIndex===di&&dragging.itemIndex===ii?'dragging':''}`} draggable onDragStart={event=>{setDragging({dayIndex:di,itemIndex:ii});event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',item.id);}} onDragEnd={()=>setDragging(null)} onDragOver={event=>event.preventDefault()} onDrop={event=>{event.stopPropagation();dropAt(event,di,ii);}} key={item.id}>
        <div className="boardCardTop"><button className="dragHandle" aria-label={`Drag ${item.title}`} title="Drag to move">⋮⋮</button><span className="boardTime">{item.time}</span><label className="boardCheck"><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>onToggle(di,ii)}/></label></div>
        <button className="boardCardTitle" onClick={()=>onOpenItem(item.id)}>{item.title}</button>
        {item.destination&&<p className="boardDestination">{item.destination}</p>}
-       <div className="boardBadges"><span className={`chip ${isFixedItem(item)?'':'neutral'}`}>{isFixedItem(item)?'Fixed':'Flexible'}</span>{item.optional&&<span className="chip neutral">Optional</span>}</div>
+       <div className="boardBadges"><span className={`boardType type-${boardType}`}>{boardType}</span><span className={`chip ${isFixedItem(item)?'':'neutral'}`}>{isFixedItem(item)?'Fixed':'Flexible'}</span>{item.optional&&<span className="chip neutral">Optional</span>}</div>
        <div className="boardCardActions"><button onClick={()=>ii>0&&onMove(di,ii,di,ii-1)} disabled={ii===0} aria-label={`Move ${item.title} up`}>↑</button><button onClick={()=>ii<day.items.length-1&&onMove(di,ii,di,ii+2)} disabled={ii===day.items.length-1} aria-label={`Move ${item.title} down`}>↓</button><select aria-label={`Move ${item.title} to another day`} value={di} onChange={event=>onMove(di,ii,Number(event.target.value),days[Number(event.target.value)].items.length)}>{days.map((target,targetIndex)=><option value={targetIndex} key={target.date}>{target.label}</option>)}</select><button onClick={()=>onDuplicate(di,ii)} aria-label={`Duplicate ${item.title}`}>⧉</button></div>
-      </article>)}
+      </article>;})}
       <button className="boardAdd" onClick={()=>onAdd(di)}>+ Add stop</button>
      </div>}
     </article>;
@@ -354,10 +354,58 @@ function ReservationsView({reservations,onShowItem}:{reservations:ReservationEnt
 
 function ItineraryEditor({item,dayIndex,itemIndex,days,onEdit,onSave,onMove,onReorder,onDelete}:{item:ItineraryItem;dayIndex:number;itemIndex:number;days:TripState['days'];onEdit:(di:number,ii:number,key:EditableKey,value:EditableValue)=>void;onSave:()=>void;onMove:(di:number,ii:number,target:number)=>void;onReorder:(di:number,ii:number,direction:-1|1)=>void;onDelete:(di:number,ii:number)=>void}){
  const [open,setOpen]=useState(false);
+ const [saved,setSaved]=useState(false);
  const inferredDuration=estimatedItemDuration(item);
  const fixed=isFixedItem(item);
  const itemType=inferItemType(item);
- return <div className="timelineCopy"><div className="between itinerarySummary"><div><div className="titleRow"><h3>{item.title}</h3><span className={`chip ${fixed?'':'neutral'}`}>{fixed?'Fixed':'Flexible'}</span><span className="chip neutral">{itemType}</span>{item.optional&&<span className="chip neutral">Optional</span>}</div><div className="muted small">{item.time}{item.destination?` · ${item.destination}`:''}{` · ${inferredDuration} min`}</div>{item.details&&<p className="muted small">{item.details}</p>}</div><button className="btn" onClick={()=>setOpen(v=>!v)}>{open?'Close':'Edit'}</button></div>{open&&<div className="itineraryEditPanel"><div className="editPrimaryFields"><label className="small">Time<input className="field" value={item.time} onChange={e=>onEdit(dayIndex,itemIndex,'time',e.target.value)} onBlur={onSave}/></label><label className="small">Title<input className="field" value={item.title} onChange={e=>onEdit(dayIndex,itemIndex,'title',e.target.value)} onBlur={onSave}/></label></div><div className="scheduleFields"><label className="small">Planning status<select className="field" value={fixed?'fixed':'flexible'} onChange={e=>{onEdit(dayIndex,itemIndex,'fixed',e.target.value==='fixed');setTimeout(onSave,0);}}><option value="fixed">Fixed plan</option><option value="flexible">Flexible idea</option></select></label><label className="small">Activity type<select className="field" value={itemType} onChange={e=>{onEdit(dayIndex,itemIndex,'type',e.target.value);setTimeout(onSave,0);}}><option value="reservation">Reservation</option><option value="activity">Activity</option><option value="food">Food</option><option value="travel">Travel</option><option value="hotel">Hotel</option></select></label><label className="small">Duration (minutes)<input className="field" type="number" min="0" step="5" value={item.estimatedDuration??''} placeholder={String(inferredDuration)} onChange={e=>onEdit(dayIndex,itemIndex,'estimatedDuration',e.target.value===''?undefined:Number(e.target.value))} onBlur={onSave}/></label><label className="small">Travel time (minutes)<input className="field" type="number" min="0" step="5" value={item.travelMinutes??''} placeholder="20" onChange={e=>onEdit(dayIndex,itemIndex,'travelMinutes',e.target.value===''?undefined:Number(e.target.value))} onBlur={onSave}/></label><label className="small">Preparation buffer<input className="field" type="number" min="0" step="5" value={item.prepBuffer??''} placeholder="15" onChange={e=>onEdit(dayIndex,itemIndex,'prepBuffer',e.target.value===''?undefined:Number(e.target.value))} onBlur={onSave}/></label></div><p className="muted small planningHint">Travel time and preparation buffer determine the Assistant’s suggested leave time for fixed plans.</p><label className="small">Description<textarea className="field" rows={2} value={item.details??''} onChange={e=>onEdit(dayIndex,itemIndex,'details',e.target.value)} onBlur={onSave}/></label><label className="small">Destination<input className="field" value={item.destination??''} placeholder="St. Lawrence Market" onChange={e=>onEdit(dayIndex,itemIndex,'destination',e.target.value)} onBlur={onSave}/></label><label className="small">Transit instructions<textarea className="field" rows={2} value={item.routeText??''} onChange={e=>onEdit(dayIndex,itemIndex,'routeText',e.target.value)} onBlur={onSave}/></label><div className="filterGrid"><label className="small">Key Info<textarea className="field" rows={3} value={item.keyInfo??item.confirmationNumber??''} onChange={e=>onEdit(dayIndex,itemIndex,'keyInfo',e.target.value)} onBlur={onSave}/></label><label className="small">Notes<textarea className="field" rows={3} value={item.userNotes??''} onChange={e=>onEdit(dayIndex,itemIndex,'userNotes',e.target.value)} onBlur={onSave}/></label></div><label className="toggleLine"><input type="checkbox" checked={Boolean(item.optional)} onChange={e=>{onEdit(dayIndex,itemIndex,'optional',e.target.checked);setTimeout(onSave,0);}}/> Optional stop</label><div className="placeActions"><button className="btn" disabled={itemIndex===0} onClick={()=>onReorder(dayIndex,itemIndex,-1)}>↑ Move up</button><button className="btn" disabled={itemIndex===days[dayIndex].items.length-1} onClick={()=>onReorder(dayIndex,itemIndex,1)}>↓ Move down</button><select className="field" value={dayIndex} onChange={e=>onMove(dayIndex,itemIndex,Number(e.target.value))} aria-label="Move to another day">{days.map((day,index)=><option key={day.date} value={index}>{index===dayIndex?'Move to day…':`${day.label} · ${day.city}`}</option>)}</select><button className="btn" onClick={()=>onDelete(dayIndex,itemIndex)}>Delete</button></div>{item.mapUrl&&<a className="textLink" href={item.mapUrl} target="_blank" rel="noreferrer">Preview transit directions ↗</a>}</div>}</div>;
+ function save(){
+  onSave();
+  setSaved(true);
+  window.setTimeout(()=>setSaved(false),1800);
+ }
+ return <div className="timelineCopy">
+  <div className="between itinerarySummary">
+   <div>
+    <div className="titleRow"><h3>{item.title}</h3><span className={`chip ${fixed?'':'neutral'}`}>{fixed?'Fixed':'Flexible'}</span><span className="chip neutral">{itemType}</span>{item.optional&&<span className="chip neutral">Optional</span>}</div>
+    <div className="muted small">{item.time}{item.destination?` · ${item.destination}`:''}{` · ${inferredDuration} min`}</div>
+    {item.details&&<p className="muted small">{item.details}</p>}
+   </div>
+   <button className="btn" onClick={()=>setOpen(value=>!value)}>{open?'Close':'Edit'}</button>
+  </div>
+  {open&&<div className="itineraryEditPanel">
+   <div className="editPrimaryFields">
+    <label className="small">Time<input className="field" value={item.time} onChange={event=>onEdit(dayIndex,itemIndex,'time',event.target.value)} onBlur={save}/></label>
+    <label className="small">Title<input className="field" value={item.title} onChange={event=>onEdit(dayIndex,itemIndex,'title',event.target.value)} onBlur={save}/></label>
+   </div>
+   <div className="scheduleFields">
+    <label className="small">Planning status<select className="field" value={fixed?'fixed':'flexible'} onChange={event=>{onEdit(dayIndex,itemIndex,'fixed',event.target.value==='fixed');save();}}><option value="fixed">Fixed plan</option><option value="flexible">Flexible idea</option></select></label>
+    <label className="small">Activity type<select className="field" value={itemType} onChange={event=>{onEdit(dayIndex,itemIndex,'type',event.target.value);save();}}><option value="reservation">Reservation</option><option value="activity">Activity</option><option value="food">Food</option><option value="travel">Travel</option><option value="hotel">Hotel</option></select></label>
+    <label className="small">Duration (minutes)<input className="field" type="number" min="0" step="5" value={item.estimatedDuration??''} placeholder={String(inferredDuration)} onChange={event=>onEdit(dayIndex,itemIndex,'estimatedDuration',event.target.value===''?undefined:Number(event.target.value))} onBlur={save}/></label>
+    <label className="small">Travel time (minutes)<input className="field" type="number" min="0" step="5" value={item.travelMinutes??''} placeholder="20" onChange={event=>onEdit(dayIndex,itemIndex,'travelMinutes',event.target.value===''?undefined:Number(event.target.value))} onBlur={save}/></label>
+    <label className="small">Preparation buffer<input className="field" type="number" min="0" step="5" value={item.prepBuffer??''} placeholder="15" onChange={event=>onEdit(dayIndex,itemIndex,'prepBuffer',event.target.value===''?undefined:Number(event.target.value))} onBlur={save}/></label>
+   </div>
+   <p className="muted small planningHint">Travel time and preparation buffer determine the Assistant’s suggested leave time for fixed plans.</p>
+   <label className="small">Description<textarea className="field" rows={2} value={item.details??''} onChange={event=>onEdit(dayIndex,itemIndex,'details',event.target.value)} onBlur={save}/></label>
+   <label className="small">Destination<input className="field" value={item.destination??''} placeholder="St. Lawrence Market" onChange={event=>onEdit(dayIndex,itemIndex,'destination',event.target.value)} onBlur={save}/></label>
+   <label className="small">Transit instructions<textarea className="field" rows={2} value={item.routeText??''} onChange={event=>onEdit(dayIndex,itemIndex,'routeText',event.target.value)} onBlur={save}/></label>
+   <div className="filterGrid">
+    <label className="small">Key Info<textarea className="field" rows={3} value={item.keyInfo??item.confirmationNumber??''} onChange={event=>onEdit(dayIndex,itemIndex,'keyInfo',event.target.value)} onBlur={save}/></label>
+    <label className="small">Notes<textarea className="field" rows={3} value={item.userNotes??''} onChange={event=>onEdit(dayIndex,itemIndex,'userNotes',event.target.value)} onBlur={save}/></label>
+   </div>
+   <label className="toggleLine"><input type="checkbox" checked={Boolean(item.optional)} onChange={event=>{onEdit(dayIndex,itemIndex,'optional',event.target.checked);save();}}/> Optional stop</label>
+   <div className="editorFooter">
+    <div className="placeActions">
+     <button className="btn" disabled={itemIndex===0} onClick={()=>onReorder(dayIndex,itemIndex,-1)}>↑ Move up</button>
+     <button className="btn" disabled={itemIndex===days[dayIndex].items.length-1} onClick={()=>onReorder(dayIndex,itemIndex,1)}>↓ Move down</button>
+     <select className="field" value={dayIndex} onChange={event=>onMove(dayIndex,itemIndex,Number(event.target.value))} aria-label="Move to another day">{days.map((day,index)=><option key={day.date} value={index}>{index===dayIndex?'Move to day…':`${day.label} · ${day.city}`}</option>)}</select>
+     <button className="btn" onClick={()=>onDelete(dayIndex,itemIndex)}>Delete</button>
+    </div>
+    <div className="saveArea"><span className={`saveStatus ${saved?'visible':''}`} role="status">Saved</span><button className="btn primary" onClick={save}>Save changes</button></div>
+   </div>
+   <p className="muted small autoSaveNote">Changes also save automatically when you leave a field.</p>
+   {item.mapUrl&&<a className="textLink" href={item.mapUrl} target="_blank" rel="noreferrer">Preview transit directions ↗</a>}
+  </div>}
+ </div>;
 }
 
 function ItineraryDetails({item,dayIndex,itemIndex,onEdit,onSave}:{item:ItineraryItem;dayIndex:number;itemIndex:number;onEdit:(di:number,ii:number,key:EditableKey,value:EditableValue)=>void;onSave:()=>void}){
