@@ -7,9 +7,27 @@ import type {ItineraryItem,Place,TripState} from '@/lib/types';
 
 const tabs=['Today','Assistant','Itinerary','Reservations','Food','Places','Checklist'] as const;
 type Tab=(typeof tabs)[number];
+type InstallPromptEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
 
 type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'userNotes'|'optional'|'fixed'|'type'|'estimatedDuration'|'travelMinutes'|'prepBuffer';
 type EditableValue=string|boolean|number|undefined;
+const localStateKey='trip-state';
+const pendingSyncKey='trip-state-pending-sync';
+const offlineReadyKey='trip-offline-ready';
+
+function readLocalState(){
+ try{
+  const value=localStorage.getItem(localStateKey);
+  return value?JSON.parse(value) as TripState:null;
+ }catch{return null;}
+}
+
+async function pushCloudState(next:TripState){
+ const response=await fetch('/api/state',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(next)});
+ if(!response.ok)return false;
+ const result=await response.json();
+ return Boolean(result.cloud);
+}
 
 function activeDayIndex(days:TripState['days']){
  const today=new Date();
@@ -51,10 +69,109 @@ export default function TripApp(){
  const [priority,setPriority]=useState('All');
  const [showVisited,setShowVisited]=useState(true);
  const [now,setNow]=useState(()=>new Date());
+ const [online,setOnline]=useState(()=>typeof navigator==='undefined'||navigator.onLine);
+ const [pendingSync,setPendingSync]=useState(false);
+ const [offlineReady,setOfflineReady]=useState(false);
+ const [offlineDownloading,setOfflineDownloading]=useState(false);
+ const [installPrompt,setInstallPrompt]=useState<InstallPromptEvent|null>(null);
 
- useEffect(()=>{fetch('/api/state').then(r=>r.json()).then(result=>{const local=localStorage.getItem('trip-state');setState(result.cloud?result.state:local?JSON.parse(local):result.state);setCloud(result.cloud);});},[]);
+ useEffect(()=>{
+  let active=true;
+  const local=readLocalState();
+  const hasPending=localStorage.getItem(pendingSyncKey)==='true';
+  setPendingSync(hasPending);
+  setOfflineReady(localStorage.getItem(offlineReadyKey)==='true');
+  void fetch('/api/state').then(async response=>{
+   if(!response.ok)throw new Error('Trip state unavailable');
+   const result=await response.json();
+   if(!active)return;
+   const selected=hasPending&&local?local:result.state;
+   setState(selected);
+   setCloud(Boolean(result.cloud));
+   localStorage.setItem(localStateKey,JSON.stringify(selected));
+   if(hasPending&&local&&navigator.onLine){
+    const synced=await pushCloudState(local);
+    if(active&&synced){
+     localStorage.removeItem(pendingSyncKey);
+     setPendingSync(false);
+     setCloud(true);
+    }
+   }
+  }).catch(()=>{
+   if(active&&local)setState(local);
+  });
+  return()=>{active=false;};
+ },[]);
+ useEffect(()=>{
+  if(!('serviceWorker'in navigator))return;
+  void navigator.serviceWorker.register('/sw.js');
+  const handleMessage=(event:MessageEvent<{type?:string}>)=>{
+   if(event.data?.type==='TRIP_CACHED'){
+    localStorage.setItem(offlineReadyKey,'true');
+    setOfflineReady(true);
+    setOfflineDownloading(false);
+   }
+  };
+  navigator.serviceWorker.addEventListener('message',handleMessage);
+  return()=>navigator.serviceWorker.removeEventListener('message',handleMessage);
+ },[]);
+ useEffect(()=>{
+  const handleOnline=async()=>{
+   setOnline(true);
+   const local=readLocalState();
+   if(localStorage.getItem(pendingSyncKey)==='true'&&local){
+    try{
+     const synced=await pushCloudState(local);
+     if(synced){
+      localStorage.removeItem(pendingSyncKey);
+      setPendingSync(false);
+      setCloud(true);
+     }
+    }catch{}
+   }
+  };
+  const handleOffline=()=>setOnline(false);
+  const handleInstall=(event:Event)=>{
+   event.preventDefault();
+   setInstallPrompt(event as InstallPromptEvent);
+  };
+  window.addEventListener('online',handleOnline);
+  window.addEventListener('offline',handleOffline);
+  window.addEventListener('beforeinstallprompt',handleInstall);
+  return()=>{
+   window.removeEventListener('online',handleOnline);
+   window.removeEventListener('offline',handleOffline);
+   window.removeEventListener('beforeinstallprompt',handleInstall);
+  };
+ },[]);
  useEffect(()=>{const timer=window.setInterval(()=>setNow(new Date()),60000);return()=>window.clearInterval(timer);},[]);
- async function persist(next:TripState){setState(next);localStorage.setItem('trip-state',JSON.stringify(next));if(cloud)await fetch('/api/state',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(next)});}
+ async function persist(next:TripState){
+  setState(next);
+  localStorage.setItem(localStateKey,JSON.stringify(next));
+  localStorage.setItem(pendingSyncKey,'true');
+  setPendingSync(true);
+  if(!navigator.onLine)return;
+  try{
+   const synced=await pushCloudState(next);
+   if(synced){
+    localStorage.removeItem(pendingSyncKey);
+    setPendingSync(false);
+    setCloud(true);
+   }
+  }catch{}
+ }
+ async function downloadOffline(){
+  if(!('serviceWorker'in navigator))return;
+  setOfflineDownloading(true);
+  const registration=await navigator.serviceWorker.ready;
+  registration.active?.postMessage({type:'CACHE_TRIP'});
+ }
+ async function installApp(){
+  if(!installPrompt)return;
+  await installPrompt.prompt();
+  await installPrompt.userChoice;
+  setInstallPrompt(null);
+ }
  function toggleDay(di:number,ii:number){if(!state)return;const next=structuredClone(state);next.days[di].items[ii].done=!next.days[di].items[ii].done;void persist(next);}
  function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='fixed')item[key]=Boolean(value);else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
  function saveEdits(di?:number){if(!state)return;const next=structuredClone(state);if(di!==undefined)next.days[di].items=sortItems(next.days[di].items);void persist(next);}
@@ -80,8 +197,9 @@ export default function TripApp(){
  const tripProgress=state.days.flatMap(day=>day.items);
  const completedTrip=tripProgress.filter(i=>i.done).length;
 
+ const syncLabel=!online?'● Offline · changes save here':pendingSync?'○ Waiting to sync':cloud?'● Shared sync':'○ Device only';
  return <>
-  <header className="hero"><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>Toronto · Niagara · Buffalo</h1><p>September 24–October 1, 2026</p></div><div className="headerActions"><span className={`sync ${cloud?'online':''}`}>{cloud?'● Shared sync':'○ Device only'}</span></div></div></header>
+  <header className="hero"><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>Toronto · Niagara · Buffalo</h1><p>September 24–October 1, 2026</p></div><div className="headerActions"><span className={`sync ${online&&cloud&&!pendingSync?'online':''} ${!online?'offline':''}`}>{syncLabel}</span><button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}</div></div></header>
   <main className="shell">
    <nav className="tabs" aria-label="Trip sections">{tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item}</button>)}</nav>
    {tab==='Today'&&currentDay&&<section>
