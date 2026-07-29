@@ -175,14 +175,20 @@ export function placeOpenStatus(place:Place,now:Date){
  const hours=place.weeklyHours?.[weekday];
  if(!hours)return {status:'unknown' as const};
  if(hours.closed)return {status:'closed' as const};
- const open=clockMinutes(hours.open);
- const close=clockMinutes(hours.close);
- if(open===undefined||close===undefined)return {status:'unknown' as const};
- const overnight=close<=open;
- const openNow=overnight?current>=open||current<close:current>=open&&current<close;
- if(!openNow)return {status:'closed' as const};
- const minutesUntilClose=overnight?(current>=open?24*60-current+close:close-current):close-current;
- return {status:'open' as const,minutesUntilClose};
+ const intervals=hours.intervals?.length?hours.intervals:[{open:hours.open,close:hours.close}];
+ let longestUntilClose:number|undefined;
+ for(const interval of intervals){
+  const open=clockMinutes(interval.open);
+  const close=clockMinutes(interval.close);
+  if(open===undefined||close===undefined)continue;
+  const overnight=close<=open;
+  const openNow=overnight?current>=open||current<close:current>=open&&current<close;
+  if(!openNow)continue;
+  const minutesUntilClose=overnight?(current>=open?24*60-current+close:close-current):close-current;
+  longestUntilClose=Math.max(longestUntilClose??0,minutesUntilClose);
+ }
+ if(longestUntilClose!==undefined)return {status:'open' as const,minutesUntilClose:longestUntilClose};
+ return {status:'closed' as const};
 }
 
 export function findCurrentDay(state:TripState,now:Date){

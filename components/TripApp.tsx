@@ -222,6 +222,15 @@ export default function TripApp(){
   setState(next);
   localStorage.setItem(localStateKey,JSON.stringify(next));
  }
+ function replacePlace(updated:Place){
+  if(!state)return;
+  const next=structuredClone(state);
+  const index=next.places.findIndex(place=>place.id===updated.id);
+  if(index<0)return;
+  next.places[index]=updated;
+  setState(next);
+  localStorage.setItem(localStateKey,JSON.stringify(next));
+ }
  function editPlaceHours(id:string,day:Weekday,changes:{open?:string;close?:string;closed?:boolean}){
   if(!state)return;
   const next=structuredClone(state);
@@ -315,7 +324,7 @@ export default function TripApp(){
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
    {tab==='Food'&&<section><div className="pageIntro"><div><div className="eyebrow">LOCAL FLAVORS</div><h2>Eat the trip</h2></div><span className="chip">{state.foods.filter(i=>i.done).length}/{state.foods.length} tried</span></div>{['Try','Bring home'].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.foods.map((food,index)=>food.category===group&&<label className={`card checkCard ${food.done?'done':''}`} key={food.id}><input type="checkbox" checked={food.done} onChange={()=>toggleList('foods',index)}/><div><h3>{food.title}</h3>{food.notes&&<p className="muted small">{food.notes}</p>}</div></label>)}</div></div>)}</section>}
-   {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>Find and manage places</h2></div><div className="placeActions"><span className="chip">{filtered.length} shown</span><button className="btn primary" onClick={addPlace}>+ Add place</button></div></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid"><select className="field" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)} onEdit={changes=>editPlace(place.id,changes)} onEditHours={(day,changes)=>editPlaceHours(place.id,day,changes)} onSave={savePlaceChanges} onDuplicate={()=>duplicatePlace(place.id)} onDelete={()=>deletePlace(place.id)} tripDates={state.days}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
+   {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>Find and manage places</h2></div><div className="placeActions"><span className="chip">{filtered.length} shown</span><button className="btn primary" onClick={addPlace}>+ Add place</button></div></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid"><select className="field" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)} onEdit={changes=>editPlace(place.id,changes)} onEditHours={(day,changes)=>editPlaceHours(place.id,day,changes)} onSave={savePlaceChanges} onGoogleUpdate={replacePlace} onDuplicate={()=>duplicatePlace(place.id)} onDelete={()=>deletePlace(place.id)} tripDates={state.days}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
    {tab==='Checklist'&&<section><div className="pageIntro"><div><div className="eyebrow">PACK SMART</div><h2>Nothing important left behind</h2></div><span className="chip">{state.packing.filter(i=>i.done).length}/{state.packing.length} packed</span></div>{[...new Set(state.packing.map(i=>i.category))].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.packing.map((item,index)=>item.category===group&&<label className={`card checkCard ${item.done?'done':''}`} key={item.id}><input type="checkbox" checked={item.done} onChange={()=>toggleList('packing',index)}/><div>{item.title}</div></label>)}</div></div>)}</section>}
   </main>
  </>;
@@ -538,9 +547,11 @@ function AssistantView({assistant,tripState,now,onComplete,onVisited,onShowPlace
 
 const placeWeekdays:[Weekday,string][]=[['monday','Mon'],['tuesday','Tue'],['wednesday','Wed'],['thursday','Thu'],['friday','Fri'],['saturday','Sat'],['sunday','Sun']];
 
-function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onDuplicate,onDelete,tripDates}:{place:Place;onToggle:()=>void;onEdit?:(changes:Partial<Place>)=>void;onEditHours?:(day:Weekday,changes:{open?:string;close?:string;closed?:boolean})=>void;onSave?:()=>void;onDuplicate?:()=>void;onDelete?:()=>void;tripDates?:TripState['days']}){
+function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDuplicate,onDelete,tripDates}:{place:Place;onToggle:()=>void;onEdit?:(changes:Partial<Place>)=>void;onEditHours?:(day:Weekday,changes:{open?:string;close?:string;closed?:boolean})=>void;onSave?:()=>void;onGoogleUpdate?:(place:Place)=>void;onDuplicate?:()=>void;onDelete?:()=>void;tripDates?:TripState['days']}){
  const [editing,setEditing]=useState(false);
  const [saved,setSaved]=useState(false);
+ const [refreshing,setRefreshing]=useState(false);
+ const [refreshMessage,setRefreshMessage]=useState('');
  const hoursCount=Object.keys(place.weeklyHours??{}).length;
  const openStatus=placeOpenStatus(place,new Date());
  function save(){
@@ -552,11 +563,30 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onDuplicate,onDelet
   onEdit?.(changes);
   if(saveImmediately)window.setTimeout(save,0);
  }
+ async function refreshFromGoogle(){
+  const storedSecret=sessionStorage.getItem('places-refresh-secret');
+  const secret=storedSecret||window.prompt('Enter the Places refresh password');
+  if(!secret)return;
+  sessionStorage.setItem('places-refresh-secret',secret);
+  setRefreshing(true);
+  setRefreshMessage('');
+  try{
+   const response=await fetch('/api/places/refresh',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({placeId:place.id,secret})});
+   const result=await response.json() as {place?:Place;matchedName?:string;error?:string};
+   if(!response.ok||!result.place)throw new Error(result.error||'Unable to refresh this place.');
+   onGoogleUpdate?.(result.place);
+   setRefreshMessage(`Updated from Google${result.matchedName?` · matched ${result.matchedName}`:''}`);
+  }catch(error){
+   if(error instanceof Error&&error.message.includes('password'))sessionStorage.removeItem('places-refresh-secret');
+   setRefreshMessage(error instanceof Error?error.message:'Unable to refresh this place.');
+  }finally{setRefreshing(false);}
+ }
  return <article className={`card placeCard ${place.visited?'visited':''} ${editing?'editing':''}`}>
   <div className="between"><span className={`priority priority-${place.priority}`}>{place.priority==='must'?'Must do':place.priority}</span><button className="visitedButton" onClick={onToggle}>{place.visited?'✓ Visited':'Mark visited'}</button></div>
   <h3>{place.name}</h3>
   <div className="muted small">{place.region} · {place.category}</div>
-  {hoursCount>0?<div className={`hoursStatus hours-${openStatus.status}`}>{openStatus.status==='open'?'Open now':openStatus.status==='closed'?'Closed now':'Hours added'}{place.hoursVerifiedAt?` · verified ${place.hoursVerifiedAt}`:' · not verified'}</div>:<div className="hoursStatus hours-unknown">Hours not added</div>}
+  {hoursCount>0?<div className={`hoursStatus hours-${openStatus.status}`}>{openStatus.status==='open'?'Open now':openStatus.status==='closed'?'Closed now':'Hours added'}{place.hoursVerifiedAt?` · ${place.hoursSource==='google'?'Google refresh':'verified'} ${new Date(place.hoursVerifiedAt).toLocaleDateString()}`:' · not verified'}</div>:<div className="hoursStatus hours-unknown">Hours not added</div>}
+  {place.formattedAddress&&<div className="muted small">{place.formattedAddress}</div>}
   {place.notes&&<p>{place.notes}</p>}
   {place.tags.length>0&&<div className="tagRow">{place.tags.slice(0,4).map(tag=><span className="chip neutral" key={tag}>{tag}</span>)}</div>}
   <div className="placeActions"><a className="btn primary" href={place.mapUrl||`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}`} target="_blank" rel="noreferrer">Directions</a>{place.menuUrl&&<a className="btn" href={place.menuUrl} target="_blank" rel="noreferrer">Menu</a>}{place.websiteUrl&&<a className="btn" href={place.websiteUrl} target="_blank" rel="noreferrer">Website</a>}{onEdit&&<button className="btn" onClick={()=>setEditing(value=>!value)}>{editing?'Close editor':'Edit place'}</button>}</div>
@@ -578,7 +608,8 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onDuplicate,onDelet
    </div>
    {tripDates&&<fieldset className="recommendedDates"><legend>Recommended trip days</legend><div>{tripDates.map(day=><label className="toggleLine" key={day.date}><input type="checkbox" checked={place.recommendedDates?.includes(day.date)??false} onChange={event=>{const dates=new Set(place.recommendedDates??[]);if(event.target.checked)dates.add(day.date);else dates.delete(day.date);edit({recommendedDates:[...dates]},true);}}/> {day.label}</label>)}</div></fieldset>}
    <div className="hoursEditor">
-    <div className="between"><div><strong>Weekly hours</strong><p className="muted small">Used to prevent closed-place suggestions.</p></div><button className="btn" onClick={()=>edit({hoursVerifiedAt:new Date().toISOString().slice(0,10)},true)}>Mark verified today</button></div>
+    <div className="between"><div><strong>Weekly hours</strong><p className="muted small">Used to prevent closed-place suggestions.</p></div><div className="placeActions"><button className="btn primary" onClick={refreshFromGoogle} disabled={refreshing}>{refreshing?'Refreshing…':'Refresh from Google'}</button><button className="btn" onClick={()=>edit({hoursVerifiedAt:new Date().toISOString(),hoursSource:'manual'},true)}>Mark verified today</button></div></div>
+    {refreshMessage&&<p className="muted small" role="status">{refreshMessage}</p>}
     {placeWeekdays.map(([day,label])=>{const hours=place.weeklyHours?.[day]??{open:'09:00',close:'17:00',closed:false};return <div className="hoursRow" key={day}><strong>{label}</strong><input className="field" type="time" value={hours.open} disabled={hours.closed} onChange={event=>onEditHours(day,{open:event.target.value})} onBlur={save}/><span>to</span><input className="field" type="time" value={hours.close} disabled={hours.closed} onChange={event=>onEditHours(day,{close:event.target.value})} onBlur={save}/><label className="toggleLine"><input type="checkbox" checked={Boolean(hours.closed)} onChange={event=>{onEditHours(day,{closed:event.target.checked});window.setTimeout(save,0);}}/> Closed</label></div>;})}
    </div>
    <div className="editorFooter"><div className="placeActions"><button className="btn" onClick={onDuplicate}>Duplicate</button><button className="btn danger" onClick={onDelete}>Delete place</button></div><div className="saveArea"><span className={`saveStatus ${saved?'visible':''}`} role="status">Saved</span><button className="btn primary" onClick={save}>Save changes</button></div></div>
