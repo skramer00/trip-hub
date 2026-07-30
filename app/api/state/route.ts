@@ -8,9 +8,26 @@ function mergeState(stored:TripState):TripState{
  const days=initialState.days.map(day=>{
   const savedDay=storedDays.get(day.date);
   const savedItems=new Map(savedDay?.items.map(item=>[item.id,item])??[]);
-  return {...day,...savedDay,items:day.items.map(item=>({...item,...savedItems.get(item.id),mapUrl:item.mapUrl,routeText:item.routeText}))};
+  const initialIds=new Set(day.items.map(item=>item.id));
+  const mergedInitialItems=day.items.map(item=>({
+   ...item,
+   ...savedItems.get(item.id),
+   mapUrl:savedItems.get(item.id)?.mapUrl??item.mapUrl,
+   routeText:savedItems.get(item.id)?.routeText??item.routeText
+  }));
+  const customItems=(savedDay?.items??[]).filter(item=>!initialIds.has(item.id));
+  return {...day,...savedDay,items:[...mergedInitialItems,...customItems]};
  });
- return {...initialState,...stored,days,places:stored.places?.length?stored.places:initialState.places};
+
+ const initialDates=new Set(initialState.days.map(day=>day.date));
+ const customDays=stored.days.filter(day=>!initialDates.has(day.date));
+
+ return {
+  ...initialState,
+  ...stored,
+  days:[...days,...customDays],
+  places:stored.places?.length?stored.places:initialState.places
+ };
 }
 
 export async function GET(){
