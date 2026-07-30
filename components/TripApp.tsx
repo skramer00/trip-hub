@@ -2,6 +2,8 @@
 
 import {useEffect,useMemo,useState} from 'react';
 import {buildAssistantState,estimatedItemDuration,findSuggestionCandidates,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
+import {checkItineraryHours} from '@/lib/place-hours';
+import type {ItineraryHoursCheck} from '@/lib/place-hours';
 import type {AssistantState,SuggestedPlace} from '@/lib/assistant';
 import type {ItineraryItem,Place,TripState,Weekday} from '@/lib/types';
 
@@ -9,7 +11,7 @@ const tabs=['Today','Assistant','Board','Itinerary','Reservations','Food','Place
 type Tab=(typeof tabs)[number];
 type InstallPromptEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
 
-type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'userNotes'|'optional'|'fixed'|'type'|'estimatedDuration'|'travelMinutes'|'prepBuffer';
+type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'userNotes'|'optional'|'fixed'|'type'|'estimatedDuration'|'travelMinutes'|'prepBuffer'|'placeId';
 type EditableValue=string|boolean|number|undefined;
 const localStateKey='trip-state';
 const pendingSyncKey='trip-state-pending-sync';
@@ -296,6 +298,7 @@ export default function TripApp(){
  const totalToday=currentDay?.items.length??0;
  const tripProgress=state.days.flatMap(day=>day.items);
  const completedTrip=tripProgress.filter(i=>i.done).length;
+ const itineraryHoursIssues=state.days.flatMap(day=>day.items.map(item=>checkItineraryHours(item,day.date,state.places))).filter((check):check is ItineraryHoursCheck=>Boolean(check&&(check.status==='closed'||check.status==='closesSoon')));
 
  const syncLabel=!online?'● Offline · changes save here':pendingSync?'○ Waiting to sync':cloud?'● Shared sync':'○ Device only';
  return <>
@@ -307,7 +310,7 @@ export default function TripApp(){
     {nextStep?<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><div className="between" style={{alignItems:'flex-start',gap:'16px',marginTop:'6px'}}><div><h2 style={{marginBottom:'4px'}}>{nextStep.title}</h2><div className="muted">{nextStep.time}</div>{nextStep.details&&<p>{nextStep.details}</p>}{nextStep.routeText&&<p className="muted small">🚌 {nextStep.routeText}</p>}{(nextStep.keyInfo||nextStep.confirmationNumber)&&<div style={{marginTop:'12px'}}><strong>Key Info</strong><p style={{whiteSpace:'pre-wrap',marginTop:'4px'}}>{nextStep.keyInfo??nextStep.confirmationNumber}</p></div>}</div><span className="chip">{nextStepIndex+1} of {currentDay.items.length}</span></div><div className="placeActions" style={{marginTop:'14px'}}>{nextStep.mapUrl&&<a className="btn primary" href={nextStep.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}<button className="btn" onClick={()=>toggleDay(currentDayIndex,nextStepIndex)}>Mark complete</button></div></div>:<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><h2 style={{marginTop:'6px'}}>You’re done for today</h2><p className="muted">Every itinerary item for this day is complete.</p></div>}
     <div className="statGrid"><div className="stat"><span>Trip progress</span><strong>{completedTrip}/{tripProgress.length}</strong></div><div className="stat"><span>Saved places</span><strong>{state.places.length}</strong></div><div className="stat"><span>Foods remaining</span><strong>{state.foods.filter(i=>!i.done).length}</strong></div></div>
     <h2 className="sectionTitle">Today’s plan</h2>
-    {currentDay.items.map((item,index)=><div className={`card timelineItem ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(currentDayIndex,index)}/><div className="timeBadge">{item.time}</div><ItineraryDetails item={item} dayIndex={currentDayIndex} itemIndex={index} onEdit={editItem} onSave={()=>saveEdits(currentDayIndex)}/></div>)}
+    {currentDay.items.map((item,index)=>{const hoursCheck=checkItineraryHours(item,currentDay.date,state.places);return <div className={`card timelineItem ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(currentDayIndex,index)}/><div className="timeBadge">{item.time}</div><ItineraryDetails item={item} dayIndex={currentDayIndex} itemIndex={index} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(currentDayIndex)} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setCategory('All');setPriority('All');setTab('Places');}}/></div>;})}
     <div className="between sectionHeading"><h2 className="sectionTitle">Recommended for this day</h2><button className="textButton" onClick={()=>{setRegion(currentDay.city.includes('Toronto')?'Toronto':'Niagara & Buffalo');setTab('Places');}}>See all</button></div>
     <div className="grid compactGrid">{nearbySuggestions.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>
    </section>}
@@ -326,7 +329,7 @@ export default function TripApp(){
     setTab('Itinerary');
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
-   {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2></div><span className="chip">{completedTrip}/{tripProgress.length} complete</span></div>{state.days.map((day,di)=><article className="card dayCard" key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>addItem(di)}>+ Add stop</button></div></div>{day.items.map((item,ii)=><div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor item={item} dayIndex={di} itemIndex={ii} days={state.days} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem}/></div></div>)}</article>)}</section>}
+   {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2></div><div className="placeActions">{itineraryHoursIssues.length>0&&<span className="chip hoursIssueCount">{itineraryHoursIssues.length} hours notice{itineraryHoursIssues.length===1?'':'s'}</span>}<span className="chip">{completedTrip}/{tripProgress.length} complete</span></div></div>{state.days.map((day,di)=><article className="card dayCard" key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>addItem(di)}>+ Add stop</button></div></div>{day.items.map((item,ii)=>{const hoursCheck=checkItineraryHours(item,day.date,state.places);return <div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor item={item} dayIndex={di} itemIndex={ii} days={state.days} places={state.places} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setCategory('All');setPriority('All');setTab('Places');}}/></div></div>;})}</article>)}</section>}
    {tab==='Reservations'&&<ReservationsView reservations={reservations} onShowItem={itemId=>{
     setTab('Itinerary');
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
@@ -427,7 +430,7 @@ function ReservationsView({reservations,onShowItem}:{reservations:ReservationEnt
  </section>;
 }
 
-function ItineraryEditor({item,dayIndex,itemIndex,days,onEdit,onSave,onMove,onReorder,onDelete}:{item:ItineraryItem;dayIndex:number;itemIndex:number;days:TripState['days'];onEdit:(di:number,ii:number,key:EditableKey,value:EditableValue)=>void;onSave:()=>void;onMove:(di:number,ii:number,target:number)=>void;onReorder:(di:number,ii:number,direction:-1|1)=>void;onDelete:(di:number,ii:number)=>void}){
+function ItineraryEditor({item,dayIndex,itemIndex,days,places,hoursCheck,onEdit,onSave,onMove,onReorder,onDelete,onShowPlace}:{item:ItineraryItem;dayIndex:number;itemIndex:number;days:TripState['days'];places:Place[];hoursCheck?:ItineraryHoursCheck;onEdit:(di:number,ii:number,key:EditableKey,value:EditableValue)=>void;onSave:()=>void;onMove:(di:number,ii:number,target:number)=>void;onReorder:(di:number,ii:number,direction:-1|1)=>void;onDelete:(di:number,ii:number)=>void;onShowPlace:(place:Place)=>void}){
  const [open,setOpen]=useState(false);
  const [saved,setSaved]=useState(false);
  const inferredDuration=estimatedItemDuration(item);
@@ -441,9 +444,10 @@ function ItineraryEditor({item,dayIndex,itemIndex,days,onEdit,onSave,onMove,onRe
  return <div className="timelineCopy">
   <div className="between itinerarySummary">
    <div>
-    <div className="titleRow"><h3>{item.title}</h3><span className={`chip ${fixed?'':'neutral'}`}>{fixed?'Fixed':'Flexible'}</span><span className="chip neutral">{itemType}</span>{item.optional&&<span className="chip neutral">Optional</span>}</div>
+    <div className="titleRow"><h3>{item.title}</h3><span className={`chip ${fixed?'':'neutral'}`}>{fixed?'Fixed':'Flexible'}</span><span className="chip neutral">{itemType}</span>{item.optional&&<span className="chip neutral">Optional</span>}{hoursCheck&&<span className={`itineraryHoursBadge check-${hoursCheck.status}`}>{hoursCheck.label}</span>}</div>
     <div className="muted small">{item.time}{item.destination?` · ${item.destination}`:''}{` · ${inferredDuration} min`}</div>
     {item.details&&<p className="muted small">{item.details}</p>}
+    {hoursCheck&&hoursCheck.status!=='open'&&<div className={`itineraryHoursNotice check-${hoursCheck.status}`}><div><strong>{hoursCheck.place.name}</strong><p>{hoursCheck.message}</p></div><button className="textButton" onClick={()=>onShowPlace(hoursCheck.place)}>Review place</button></div>}
    </div>
    <button className="btn" onClick={()=>setOpen(value=>!value)}>{open?'Close':'Edit'}</button>
   </div>
@@ -462,6 +466,7 @@ function ItineraryEditor({item,dayIndex,itemIndex,days,onEdit,onSave,onMove,onRe
    <p className="muted small planningHint">Travel time and preparation buffer determine the Assistant’s suggested leave time for fixed plans.</p>
    <label className="small">Description<textarea className="field" rows={2} value={item.details??''} onChange={event=>onEdit(dayIndex,itemIndex,'details',event.target.value)} onBlur={save}/></label>
    <label className="small">Destination<input className="field" value={item.destination??''} placeholder="St. Lawrence Market" onChange={event=>onEdit(dayIndex,itemIndex,'destination',event.target.value)} onBlur={save}/></label>
+   <label className="small">Saved place for hours<select className="field" value={item.placeId??''} onChange={event=>{onEdit(dayIndex,itemIndex,'placeId',event.target.value);window.setTimeout(save,0);}}><option value="">{hoursCheck&&!item.placeId?`Auto-matched: ${hoursCheck.place.name}`:'No saved place linked'}</option>{['Toronto','Niagara & Buffalo'].map(placeRegion=><optgroup label={placeRegion} key={placeRegion}>{places.filter(place=>place.region===placeRegion).sort((a,b)=>a.name.localeCompare(b.name)).map(place=><option value={place.id} key={place.id}>{place.name}</option>)}</optgroup>)}</select><span className="muted small">Linking a place makes schedule checks precise; clear it to use name matching.</span></label>
    <label className="small">Transit instructions<textarea className="field" rows={2} value={item.routeText??''} onChange={event=>onEdit(dayIndex,itemIndex,'routeText',event.target.value)} onBlur={save}/></label>
    <div className="filterGrid">
     <label className="small">Key Info<textarea className="field" rows={3} value={item.keyInfo??item.confirmationNumber??''} onChange={event=>onEdit(dayIndex,itemIndex,'keyInfo',event.target.value)} onBlur={save}/></label>
@@ -483,9 +488,9 @@ function ItineraryEditor({item,dayIndex,itemIndex,days,onEdit,onSave,onMove,onRe
  </div>;
 }
 
-function ItineraryDetails({item,dayIndex,itemIndex,onEdit,onSave}:{item:ItineraryItem;dayIndex:number;itemIndex:number;onEdit:(di:number,ii:number,key:EditableKey,value:EditableValue)=>void;onSave:()=>void}){
+function ItineraryDetails({item,dayIndex,itemIndex,hoursCheck,onEdit,onSave,onShowPlace}:{item:ItineraryItem;dayIndex:number;itemIndex:number;hoursCheck?:ItineraryHoursCheck;onEdit:(di:number,ii:number,key:EditableKey,value:EditableValue)=>void;onSave:()=>void;onShowPlace:(place:Place)=>void}){
  const keyInfo=item.keyInfo??item.confirmationNumber??'';
- return <div className="timelineCopy"><div className="titleRow"><h3>{item.title}</h3>{item.optional&&<span className="chip neutral">Optional</span>}</div>{item.details&&<p className="muted small">{item.details}</p>}<details style={{marginTop:'10px'}}><summary className="textLink" style={{cursor:'pointer'}}>Trip details</summary><div style={{paddingTop:'10px'}}>{item.routeText&&<p className="muted small">🚌 {item.routeText}</p>}{item.mapUrl&&<a className="textLink" href={item.mapUrl} target="_blank" rel="noreferrer">Transit from current location ↗</a>}<div className="filterGrid" style={{marginTop:'12px'}}><label className="small">Key Info<textarea className="field" rows={3} value={keyInfo} placeholder="Confirmation, seat, terminal, ticket details…" onChange={e=>onEdit(dayIndex,itemIndex,'keyInfo',e.target.value)} onBlur={onSave}/></label><label className="small">Notes<textarea className="field" rows={3} value={item.userNotes??''} placeholder="Add reminders or details" onChange={e=>onEdit(dayIndex,itemIndex,'userNotes',e.target.value)} onBlur={onSave}/></label></div></div></details></div>;
+ return <div className="timelineCopy"><div className="titleRow"><h3>{item.title}</h3>{item.optional&&<span className="chip neutral">Optional</span>}{hoursCheck&&<span className={`itineraryHoursBadge check-${hoursCheck.status}`}>{hoursCheck.label}</span>}</div>{item.details&&<p className="muted small">{item.details}</p>}{hoursCheck&&hoursCheck.status!=='open'&&<div className={`itineraryHoursNotice compact check-${hoursCheck.status}`}><div><strong>{hoursCheck.place.name}</strong><p>{hoursCheck.message}</p></div><button className="textButton" onClick={()=>onShowPlace(hoursCheck.place)}>Review</button></div>}<details style={{marginTop:'10px'}}><summary className="textLink" style={{cursor:'pointer'}}>Trip details</summary><div style={{paddingTop:'10px'}}>{item.routeText&&<p className="muted small">🚌 {item.routeText}</p>}{item.mapUrl&&<a className="textLink" href={item.mapUrl} target="_blank" rel="noreferrer">Transit from current location ↗</a>}<div className="filterGrid" style={{marginTop:'12px'}}><label className="small">Key Info<textarea className="field" rows={3} value={keyInfo} placeholder="Confirmation, seat, terminal, ticket details…" onChange={e=>onEdit(dayIndex,itemIndex,'keyInfo',e.target.value)} onBlur={onSave}/></label><label className="small">Notes<textarea className="field" rows={3} value={item.userNotes??''} placeholder="Add reminders or details" onChange={e=>onEdit(dayIndex,itemIndex,'userNotes',e.target.value)} onBlur={onSave}/></label></div></div></details></div>;
 }
 
 function formatClock(value:Date){

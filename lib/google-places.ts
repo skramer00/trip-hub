@@ -24,12 +24,25 @@ function rangesFromPeriods(periods:GooglePeriod[]=[]){
   const dayNumber=period.open?.day;
   const open=clock(period.open);
   if(dayNumber===undefined||!open)continue;
+  if(!period.close){
+   for(const weekday of WEEKDAYS)grouped.set(weekday,[{open:'00:00',close:'24:00'}]);
+   continue;
+  }
   const day=WEEKDAYS[dayNumber];
   if(!day)continue;
-  const close=clock(period.close)??'23:59';
+  const close=clock(period.close)??'24:00';
+  const closeDayNumber=period.close.day??dayNumber;
   const ranges=grouped.get(day)??[];
-  ranges.push({open,close});
+  ranges.push({open,close:closeDayNumber===dayNumber?close:'24:00'});
   grouped.set(day,ranges);
+  if(closeDayNumber!==dayNumber&&close!=='00:00'){
+   const closeDay=WEEKDAYS[closeDayNumber];
+   if(closeDay){
+    const closeDayRanges=grouped.get(closeDay)??[];
+    closeDayRanges.push({open:'00:00',close});
+    grouped.set(closeDay,closeDayRanges);
+   }
+  }
  }
  const result:Partial<Record<Weekday,PlaceHoursRange>>={};
  for(const day of WEEKDAYS){
