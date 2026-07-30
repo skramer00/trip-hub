@@ -1,6 +1,7 @@
 import {NextResponse} from 'next/server';
 import {fetchGooglePlace} from '@/lib/google-places';
 import {loadState,saveState} from '@/lib/db';
+import {suggestPlaceArea} from '@/lib/place-areas';
 import type {Place} from '@/lib/types';
 
 export const runtime='nodejs';
@@ -32,6 +33,7 @@ export async function POST(request:Request){
     if(google.formattedAddress)place.formattedAddress=google.formattedAddress;
     if(google.latitude!==undefined)place.latitude=google.latitude;
     if(google.longitude!==undefined)place.longitude=google.longitude;
+    if(!place.area)place.area=suggestPlaceArea(place);
     if(google.mapUrl)place.mapUrl=google.mapUrl;
     if(google.websiteUrl&&!place.websiteUrl)place.websiteUrl=google.websiteUrl;
     place.weeklyHours=google.weeklyHours;

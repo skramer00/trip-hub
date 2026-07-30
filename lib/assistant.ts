@@ -112,7 +112,7 @@ function meaningfulTokens(value:string){
 }
 
 function placeText(place:Place){
- return `${place.name} ${place.category} ${place.notes} ${place.tags.join(' ')}`.toLowerCase();
+ return `${place.name} ${place.area??''} ${place.category} ${place.notes} ${place.tags.join(' ')}`.toLowerCase();
 }
 
 function normalizedPlaceName(value:string){
@@ -320,6 +320,10 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
  if(place.recommendedDates?.includes(day.date)){score+=30;reasons.push('Recommended for this day');}
  if(placeMatchesDay(place,day)){score+=15;reasons.push(`Fits your ${day.city} plans`);}
  const anchorLocation=context.location??(placeHasCoordinates(context.anchorPlace)?{latitude:context.anchorPlace.latitude,longitude:context.anchorPlace.longitude,label:context.anchorPlace.name}:undefined);
+ if(context.anchorPlace?.area&&place.area===context.anchorPlace.area){
+  score+=18;
+  reasons.push(`In the same area: ${place.area}`);
+ }
  const distanceKm=anchorLocation&&placeHasCoordinates(place)?distanceBetweenCoordinates(anchorLocation,place):undefined;
  const walkingMinutes=distanceKm!==undefined?approximateWalkingMinutes(distanceKm):undefined;
  if(distanceKm!==undefined){

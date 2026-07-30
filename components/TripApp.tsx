@@ -3,6 +3,7 @@
 import {useEffect,useMemo,useState} from 'react';
 import {buildAssistantState,estimatedItemDuration,findSuggestionCandidates,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
 import {checkItineraryHours} from '@/lib/place-hours';
+import {areaOptions,suggestedAreaNames,suggestPlaceArea} from '@/lib/place-areas';
 import {deleteReservationAttachment,listReservationAttachments,saveReservationAttachment} from '@/lib/attachments';
 import type {ReservationAttachment} from '@/lib/attachments';
 import type {ItineraryHoursCheck} from '@/lib/place-hours';
@@ -70,6 +71,7 @@ export default function TripApp(){
  const [cloud,setCloud]=useState(false);
  const [query,setQuery]=useState('');
  const [region,setRegion]=useState('All');
+ const [area,setArea]=useState('All');
  const [category,setCategory]=useState('All');
  const [priority,setPriority]=useState('All');
  const [showVisited,setShowVisited]=useState(true);
@@ -276,6 +278,19 @@ export default function TripApp(){
   setState(next);
   localStorage.setItem(localStateKey,JSON.stringify(next));
  }
+ function assignSuggestedAreas(){
+  if(!state)return;
+  const next=structuredClone(state);
+  let changed=0;
+  next.places.forEach(place=>{
+   if(place.area)return;
+   const suggestion=suggestPlaceArea(place);
+   if(!suggestion)return;
+   place.area=suggestion;
+   changed+=1;
+  });
+  if(changed)void persist(next);
+ }
  function editPlaceHours(id:string,day:Weekday,changes:{open?:string;close?:string;closed?:boolean}){
   if(!state)return;
   const next=structuredClone(state);
@@ -295,6 +310,7 @@ export default function TripApp(){
   void persist(next);
   setQuery('New place');
   setRegion('All');
+  setArea('All');
   setCategory('All');
   setPriority('All');
  }
@@ -323,7 +339,10 @@ export default function TripApp(){
  const currentDay=state?.days[currentDayIndex];
  const nextStepIndex=currentDay?.items.findIndex(item=>!item.done)??-1;
  const nextStep=nextStepIndex>=0?currentDay?.items[nextStepIndex]:undefined;
- const filtered=useMemo(()=>{if(!state)return[];const needle=query.trim().toLowerCase();return state.places.filter(place=>(region==='All'||place.region===region)&&(category==='All'||place.category===category)&&(priority==='All'||place.priority===priority)&&(showVisited||!place.visited)&&(!needle||`${place.name} ${place.notes} ${place.tags.join(' ')}`.toLowerCase().includes(needle)));},[state,query,region,category,priority,showVisited]);
+ const availableAreas=useMemo(()=>areaOptions(state?.places??[]),[state]);
+ const unassignedAreaCount=state?.places.filter(place=>!place.area).length??0;
+ const suggestibleAreaCount=state?.places.filter(place=>!place.area&&Boolean(suggestPlaceArea(place))).length??0;
+ const filtered=useMemo(()=>{if(!state)return[];const needle=query.trim().toLowerCase();return state.places.filter(place=>(region==='All'||place.region===region)&&(area==='All'||(area==='Unassigned'?!place.area:place.area===area))&&(category==='All'||place.category===category)&&(priority==='All'||place.priority===priority)&&(showVisited||!place.visited)&&(!needle||`${place.name} ${place.area??''} ${place.notes} ${place.tags.join(' ')}`.toLowerCase().includes(needle)));},[state,query,region,area,category,priority,showVisited]);
  const nearbySuggestions=useMemo(()=>{if(!state||!currentDay)return[];const rank={must:0,possible:1,backup:2};return state.places.filter(place=>placeMatchesDay(place,currentDay.city,currentDay.date)&&!place.visited).sort((a,b)=>rank[a.priority]-rank[b.priority]).slice(0,6);},[state,currentDay]);
  const assistant=useMemo(()=>state?buildAssistantState(state,now,liveLocation??undefined):null,[state,now,liveLocation]);
  const reservations=useMemo(()=>state?state.days.flatMap(day=>day.items.flatMap(item=>isFixedItem(item)?[{day,item}]:[])):[],[state]);
@@ -345,8 +364,8 @@ export default function TripApp(){
     {nextStep?<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><div className="between" style={{alignItems:'flex-start',gap:'16px',marginTop:'6px'}}><div><h2 style={{marginBottom:'4px'}}>{nextStep.title}</h2><div className="muted">{nextStep.time}</div>{nextStep.details&&<p>{nextStep.details}</p>}{nextStep.routeText&&<p className="muted small">🚌 {nextStep.routeText}</p>}{(nextStep.keyInfo||nextStep.confirmationNumber)&&<div style={{marginTop:'12px'}}><strong>Key Info</strong><p style={{whiteSpace:'pre-wrap',marginTop:'4px'}}>{nextStep.keyInfo??nextStep.confirmationNumber}</p></div>}</div><span className="chip">{nextStepIndex+1} of {currentDay.items.length}</span></div><div className="placeActions" style={{marginTop:'14px'}}>{nextStep.mapUrl&&<a className="btn primary" href={nextStep.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}<button className="btn" onClick={()=>toggleDay(currentDayIndex,nextStepIndex)}>Mark complete</button></div></div>:<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><h2 style={{marginTop:'6px'}}>You’re done for today</h2><p className="muted">Every itinerary item for this day is complete.</p></div>}
     <div className="statGrid"><div className="stat"><span>Trip progress</span><strong>{completedTrip}/{tripProgress.length}</strong></div><div className="stat"><span>Saved places</span><strong>{state.places.length}</strong></div><div className="stat"><span>Foods remaining</span><strong>{state.foods.filter(i=>!i.done).length}</strong></div></div>
     <h2 className="sectionTitle">Today’s plan</h2>
-    {currentDay.items.map((item,index)=>{const hoursCheck=checkItineraryHours(item,currentDay.date,state.places);return <div className={`card timelineItem ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(currentDayIndex,index)}/><div className="timeBadge">{item.time}</div><ItineraryDetails item={item} dayIndex={currentDayIndex} itemIndex={index} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(currentDayIndex)} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setCategory('All');setPriority('All');setTab('Places');}}/></div>;})}
-    <div className="between sectionHeading"><h2 className="sectionTitle">Recommended for this day</h2><button className="textButton" onClick={()=>{setRegion(currentDay.city.includes('Toronto')?'Toronto':'Niagara & Buffalo');setTab('Places');}}>See all</button></div>
+    {currentDay.items.map((item,index)=>{const hoursCheck=checkItineraryHours(item,currentDay.date,state.places);return <div className={`card timelineItem ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(currentDayIndex,index)}/><div className="timeBadge">{item.time}</div><ItineraryDetails item={item} dayIndex={currentDayIndex} itemIndex={index} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(currentDayIndex)} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div>;})}
+    <div className="between sectionHeading"><h2 className="sectionTitle">Recommended for this day</h2><button className="textButton" onClick={()=>{setRegion(currentDay.city.includes('Toronto')?'Toronto':'Niagara & Buffalo');setArea('All');setTab('Places');}}>See all</button></div>
     <div className="grid compactGrid">{nearbySuggestions.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>
    </section>}
    {tab==='Assistant'&&assistant&&<AssistantView assistant={assistant} tripState={state} now={now} liveLocation={liveLocation} locationStatus={locationStatus} locationMessage={locationMessage} onRequestLocation={requestLocation} onStopLocation={stopUsingLocation} onComplete={item=>{
@@ -356,24 +375,26 @@ export default function TripApp(){
    }} onVisited={toggleVisited} onShowPlaces={place=>{
     setQuery(place.name);
     setRegion(place.region);
+    setArea('All');
     setCategory('All');
     setPriority('All');
     setTab('Places');
    }}/>}
-   {tab==='Board'&&<TripBoard days={state.days} canUndo={Boolean(boardUndo)} onUndo={undoBoardChange} onMove={moveBoardItem} onDuplicate={duplicateBoardItem} onAdd={addBoardItem} onToggle={toggleDay} onOpenItem={itemId=>{
+   {tab==='Board'&&<TripBoard days={state.days} places={state.places} canUndo={Boolean(boardUndo)} onUndo={undoBoardChange} onMove={moveBoardItem} onDuplicate={duplicateBoardItem} onAdd={addBoardItem} onToggle={toggleDay} onOpenItem={itemId=>{
     setTab('Itinerary');
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
-   {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2></div><div className="placeActions">{itineraryHoursIssues.length>0&&<span className="chip hoursIssueCount">{itineraryHoursIssues.length} hours notice{itineraryHoursIssues.length===1?'':'s'}</span>}<span className="chip">{completedTrip}/{tripProgress.length} complete</span></div></div>{state.days.map((day,di)=><article className="card dayCard" key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>addItem(di)}>+ Add stop</button></div></div>{day.items.map((item,ii)=>{const hoursCheck=checkItineraryHours(item,day.date,state.places);return <div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor item={item} dayIndex={di} itemIndex={ii} days={state.days} places={state.places} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setCategory('All');setPriority('All');setTab('Places');}}/></div></div>;})}</article>)}</section>}
+   {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2></div><div className="placeActions">{itineraryHoursIssues.length>0&&<span className="chip hoursIssueCount">{itineraryHoursIssues.length} hours notice{itineraryHoursIssues.length===1?'':'s'}</span>}<span className="chip">{completedTrip}/{tripProgress.length} complete</span></div></div>{state.days.map((day,di)=><article className="card dayCard" key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>addItem(di)}>+ Add stop</button></div></div>{day.items.map((item,ii)=>{const hoursCheck=checkItineraryHours(item,day.date,state.places);return <div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor item={item} dayIndex={di} itemIndex={ii} days={state.days} places={state.places} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div></div>;})}</article>)}</section>}
    {tab==='Reservations'&&<ReservationsView reservations={reservations} onShowItem={itemId=>{
     setTab('Itinerary');
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
    {tab==='Food'&&<section><div className="pageIntro"><div><div className="eyebrow">LOCAL FLAVORS</div><h2>Eat the trip</h2></div><span className="chip">{state.foods.filter(i=>i.done).length}/{state.foods.length} tried</span></div>{['Try','Bring home'].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.foods.map((food,index)=>food.category===group&&<label className={`card checkCard ${food.done?'done':''}`} key={food.id}><input type="checkbox" checked={food.done} onChange={()=>toggleList('foods',index)}/><div><h3>{food.title}</h3>{food.notes&&<p className="muted small">{food.notes}</p>}</div></label>)}</div></div>)}</section>}
-   {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>Find and manage places</h2></div><div className="placeActions"><span className="chip">{filtered.length} shown</span><button className="btn primary" onClick={addPlace}>+ Add place</button></div></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid"><select className="field" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)} onEdit={changes=>editPlace(place.id,changes)} onEditHours={(day,changes)=>editPlaceHours(place.id,day,changes)} onSave={savePlaceChanges} onGoogleUpdate={replacePlace} onDuplicate={()=>duplicatePlace(place.id)} onDelete={()=>deletePlace(place.id)} tripDates={state.days}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
+   {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>Find and manage places</h2><p className="muted">Organize saved spots by region and neighborhood so nearby suggestions stay geographically sensible.</p></div><div className="placeActions"><span className="chip">{filtered.length} shown</span>{unassignedAreaCount>0&&<button className="btn" onClick={()=>setArea('Unassigned')}>{unassignedAreaCount} unassigned</button>}{suggestibleAreaCount>0&&<button className="btn" onClick={assignSuggestedAreas}>Suggest {suggestibleAreaCount} areas</button>}<button className="btn primary" onClick={addPlace}>+ Add place</button></div></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, neighborhoods, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid placeFilters"><select className="field" aria-label="Filter by region" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" aria-label="Filter by area" value={area} onChange={e=>setArea(e.target.value)}><option>All</option><option>Unassigned</option>{availableAreas.map(value=><option value={value} key={value}>{value}</option>)}</select><select className="field" aria-label="Filter by category" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" aria-label="Filter by priority" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)} onEdit={changes=>editPlace(place.id,changes)} onEditHours={(day,changes)=>editPlaceHours(place.id,day,changes)} onSave={savePlaceChanges} onGoogleUpdate={replacePlace} onDuplicate={()=>duplicatePlace(place.id)} onDelete={()=>deletePlace(place.id)} tripDates={state.days}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
    {tab==='Hours'&&<HoursManager places={state.places} days={state.days} onUpdated={replacePlaces} onIgnoreHours={(place,ignoreHours)=>{editPlace(place.id,{ignoreHours});window.setTimeout(savePlaceChanges,0);}} onOpenPlace={place=>{
     setQuery(place.name);
     setRegion(place.region);
+    setArea('All');
     setCategory('All');
     setPriority('All');
     setTab('Places');
@@ -385,7 +406,7 @@ export default function TripApp(){
 
 type DragPosition={dayIndex:number;itemIndex:number};
 
-function TripBoard({days,canUndo,onUndo,onMove,onDuplicate,onAdd,onToggle,onOpenItem}:{days:TripState['days'];canUndo:boolean;onUndo:()=>void;onMove:(fromDay:number,fromIndex:number,toDay:number,toIndex:number)=>void;onDuplicate:(dayIndex:number,itemIndex:number)=>void;onAdd:(dayIndex:number)=>void;onToggle:(dayIndex:number,itemIndex:number)=>void;onOpenItem:(itemId:string)=>void}){
+function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onToggle,onOpenItem}:{days:TripState['days'];places:Place[];canUndo:boolean;onUndo:()=>void;onMove:(fromDay:number,fromIndex:number,toDay:number,toIndex:number)=>void;onDuplicate:(dayIndex:number,itemIndex:number)=>void;onAdd:(dayIndex:number)=>void;onToggle:(dayIndex:number,itemIndex:number)=>void;onOpenItem:(itemId:string)=>void}){
  const [dragging,setDragging]=useState<DragPosition|null>(null);
  const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
  const [hiddenDays,setHiddenDays]=useState<Set<string>>(()=>new Set());
@@ -431,11 +452,11 @@ function TripBoard({days,canUndo,onUndo,onMove,onDuplicate,onAdd,onToggle,onOpen
     return <article className={`boardColumn ${isCollapsed?'collapsed':''}`} key={day.date} onDragOver={event=>event.preventDefault()} onDrop={event=>dropAt(event,di,day.items.length)}>
      <header className="boardColumnHeader"><button className="boardCollapse" onClick={()=>toggleCollapsed(day.date)} aria-expanded={!isCollapsed} aria-label={`${isCollapsed?'Expand':'Collapse'} ${day.label}`}>{isCollapsed?'▸':'▾'}</button><div><div className="eyebrow">{day.date}</div><h3>{day.label}</h3><p>{day.city}</p></div><span className="chip neutral">{day.items.length}</span></header>
      {!isCollapsed&&<div className="boardCards">
-      {day.items.map((item,ii)=>{const boardType=inferItemType(item);return <article className={`boardCard board-${boardType} ${item.done?'complete':''} ${dragging?.dayIndex===di&&dragging.itemIndex===ii?'dragging':''}`} draggable onDragStart={event=>{setDragging({dayIndex:di,itemIndex:ii});event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',item.id);}} onDragEnd={()=>setDragging(null)} onDragOver={event=>event.preventDefault()} onDrop={event=>{event.stopPropagation();dropAt(event,di,ii);}} key={item.id}>
+      {day.items.map((item,ii)=>{const boardType=inferItemType(item);const linkedPlace=item.placeId?places.find(place=>place.id===item.placeId):undefined;return <article className={`boardCard board-${boardType} ${item.done?'complete':''} ${dragging?.dayIndex===di&&dragging.itemIndex===ii?'dragging':''}`} draggable onDragStart={event=>{setDragging({dayIndex:di,itemIndex:ii});event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',item.id);}} onDragEnd={()=>setDragging(null)} onDragOver={event=>event.preventDefault()} onDrop={event=>{event.stopPropagation();dropAt(event,di,ii);}} key={item.id}>
        <div className="boardCardTop"><button className="dragHandle" aria-label={`Drag ${item.title}`} title="Drag to move">⋮⋮</button><span className="boardTime">{item.time}</span><label className="boardCheck"><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>onToggle(di,ii)}/></label></div>
        <button className="boardCardTitle" onClick={()=>onOpenItem(item.id)}>{item.title}</button>
        {item.destination&&<p className="boardDestination">{item.destination}</p>}
-       <div className="boardBadges"><span className={`boardType type-${boardType}`}>{boardType}</span><span className={`chip ${isFixedItem(item)?'':'neutral'}`}>{isFixedItem(item)?'Fixed':'Flexible'}</span>{item.optional&&<span className="chip neutral">Optional</span>}</div>
+       <div className="boardBadges"><span className={`boardType type-${boardType}`}>{boardType}</span><span className={`chip ${isFixedItem(item)?'':'neutral'}`}>{isFixedItem(item)?'Fixed':'Flexible'}</span>{linkedPlace?.area&&<span className="chip boardArea">{linkedPlace.area.split(' — ').at(-1)}</span>}{item.optional&&<span className="chip neutral">Optional</span>}</div>
        <div className="boardCardActions"><button onClick={()=>ii>0&&onMove(di,ii,di,ii-1)} disabled={ii===0} aria-label={`Move ${item.title} up`}>↑</button><button onClick={()=>ii<day.items.length-1&&onMove(di,ii,di,ii+2)} disabled={ii===day.items.length-1} aria-label={`Move ${item.title} down`}>↓</button><select aria-label={`Move ${item.title} to another day`} value={di} onChange={event=>onMove(di,ii,Number(event.target.value),days[Number(event.target.value)].items.length)}>{days.map((target,targetIndex)=><option value={targetIndex} key={target.date}>{target.label}</option>)}</select><button onClick={()=>onDuplicate(di,ii)} aria-label={`Duplicate ${item.title}`}>⧉</button></div>
       </article>;})}
       <button className="boardAdd" onClick={()=>onAdd(di)}>+ Add stop</button>
@@ -670,7 +691,7 @@ function AssistantView({assistant,tripState,now,liveLocation,locationStatus,loca
    <div className="grid assistantGrid">{displayedSuggestions.map(suggestion=><article className="card suggestionCard" key={suggestion.place.id}>
     <div className="between"><span className={`priority priority-${suggestion.place.priority}`}>{suggestion.place.priority==='must'?'Must do':suggestion.place.priority}</span><span className="duration">{suggestion.estimatedDuration} min</span></div>
     <h3>{suggestion.place.name}</h3>
-    <div className="muted small">{suggestion.place.category} · {suggestion.place.region}{suggestion.distanceKm!==undefined?` · ${suggestion.distanceKm<1?`${Math.max(50,Math.round(suggestion.distanceKm*1000/50)*50)} m`:`${suggestion.distanceKm.toFixed(1)} km`} away`:''}</div>
+    <div className="muted small">{suggestion.place.category} · {suggestion.place.area??suggestion.place.region}{suggestion.distanceKm!==undefined?` · ${suggestion.distanceKm<1?`${Math.max(50,Math.round(suggestion.distanceKm*1000/50)*50)} m`:`${suggestion.distanceKm.toFixed(1)} km`} away`:''}</div>
     {suggestion.place.notes&&<p>{suggestion.place.notes}</p>}
     <div className="whyBox"><strong>Why this fits</strong><ul>{suggestion.reasons.slice(0,3).map(reason=><li key={reason}>{reason}</li>)}</ul></div>
     <div className="placeActions"><a className="btn primary" href={suggestion.place.mapUrl} target="_blank" rel="noreferrer">Directions</a><button className="btn" onClick={()=>onShowPlaces(suggestion.place)}>View details</button><button className="textButton" onClick={()=>onVisited(suggestion.place.id)}>Mark visited</button></div>
@@ -819,6 +840,7 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDu
  const [refreshMessage,setRefreshMessage]=useState('');
  const hoursCount=Object.keys(place.weeklyHours??{}).length;
  const openStatus=placeOpenStatus(place,new Date());
+ const areaSuggestion=!place.area?suggestPlaceArea(place):undefined;
  function save(){
   onSave?.();
   setSaved(true);
@@ -849,7 +871,7 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDu
  return <article className={`card placeCard ${place.visited?'visited':''} ${editing?'editing':''}`}>
   <div className="between"><span className={`priority priority-${place.priority}`}>{place.priority==='must'?'Must do':place.priority}</span><button className="visitedButton" onClick={onToggle}>{place.visited?'✓ Visited':'Mark visited'}</button></div>
   <h3>{place.name}</h3>
-  <div className="muted small">{place.region} · {place.category}</div>
+  <div className="placeLocationMeta"><span className="muted small">{place.region} · {place.category}</span>{place.area&&<span className="areaBadge">{place.area}</span>}</div>
   {place.ignoreHours?<div className="hoursStatus manager-ignored">Hours ignored</div>:hoursCount>0?<div className={`hoursStatus hours-${openStatus.status}`}>{openStatus.status==='open'?'Open now':openStatus.status==='closed'?'Closed now':'Hours added'}{place.hoursVerifiedAt?` · ${place.hoursSource==='google'?'Google refresh':'verified'} ${new Date(place.hoursVerifiedAt).toLocaleDateString()}`:' · not verified'}</div>:<div className="hoursStatus hours-unknown">Hours not added</div>}
   {place.formattedAddress&&<div className="muted small">{place.formattedAddress}</div>}
   {place.notes&&<p>{place.notes}</p>}
@@ -860,6 +882,7 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDu
     <label>Name<input className="field" value={place.name} onChange={event=>edit({name:event.target.value})} onBlur={save}/></label>
     <label>Category<input className="field" value={place.category} onChange={event=>edit({category:event.target.value})} onBlur={save}/></label>
     <label>Region<select className="field" value={place.region} onChange={event=>edit({region:event.target.value},true)}><option>Toronto</option><option>Niagara & Buffalo</option></select></label>
+    <label>Area<input className="field" list={`area-options-${place.id}`} value={place.area??''} placeholder="Choose or type a neighborhood" onChange={event=>edit({area:event.target.value})} onBlur={save}/><datalist id={`area-options-${place.id}`}>{suggestedAreaNames.map(value=><option value={value} key={value}/>)}</datalist>{areaSuggestion&&<button className="areaSuggestion" type="button" onClick={()=>edit({area:areaSuggestion},true)}>Use suggestion: {areaSuggestion}</button>}</label>
     <label>Priority<select className="field" value={place.priority} onChange={event=>edit({priority:event.target.value as Place['priority']},true)}><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></label>
     <label>Visit time (minutes)<input className="field" type="number" min="5" step="5" value={place.estimatedDuration??60} onChange={event=>edit({estimatedDuration:Number(event.target.value)})} onBlur={save}/></label>
     <label>Time zone<input className="field" value={place.hoursTimeZone??'America/Toronto'} onChange={event=>edit({hoursTimeZone:event.target.value})} onBlur={save}/></label>
