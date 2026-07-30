@@ -80,7 +80,7 @@ function isInside(start:number,interval:{open:number;close:number}){
 
 export function checkItineraryHours(item:ItineraryItem,date:string,places:Place[]):ItineraryHoursCheck|undefined{
  const place=findItineraryPlace(item,places);
- if(!place)return undefined;
+ if(!place||place.ignoreHours)return undefined;
  const weekday=dateWeekday(date);
  const start=minutesFromTime(item.time);
  if(!weekday||start===undefined)return {place,status:'unknown',label:'Hours need review',message:'Add a recognizable start time to compare this stop with its opening hours.'};

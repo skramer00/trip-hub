@@ -162,6 +162,7 @@ function clockMinutes(value:string){
 }
 
 export function placeOpenStatus(place:Place,now:Date){
+ if(place.ignoreHours)return {status:'ignored' as const};
  let weekday=WEEKDAYS[now.getDay()];
  let current=now.getHours()*60+now.getMinutes();
  try{
