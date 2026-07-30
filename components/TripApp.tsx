@@ -3,8 +3,10 @@
 import {useEffect,useMemo,useState} from 'react';
 import {buildAssistantState,estimatedItemDuration,findSuggestionCandidates,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
 import {checkItineraryHours} from '@/lib/place-hours';
+import {deleteReservationAttachment,listReservationAttachments,saveReservationAttachment} from '@/lib/attachments';
+import type {ReservationAttachment} from '@/lib/attachments';
 import type {ItineraryHoursCheck} from '@/lib/place-hours';
-import type {AssistantState,SuggestedPlace} from '@/lib/assistant';
+import type {AssistantLocation,AssistantState,SuggestedPlace} from '@/lib/assistant';
 import type {ItineraryItem,Place,TripState,Weekday} from '@/lib/types';
 
 const tabs=['Today','Assistant','Board','Itinerary','Reservations','Food','Places','Hours','Checklist'] as const;
@@ -15,7 +17,7 @@ type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'u
 type EditableValue=string|boolean|number|undefined;
 const localStateKey='trip-state';
 const pendingSyncKey='trip-state-pending-sync';
-const offlineReadyKey='trip-offline-ready';
+const offlineReadyKey='trip-offline-ready-v2';
 
 function readLocalState(){
  try{
@@ -75,8 +77,12 @@ export default function TripApp(){
  const [pendingSync,setPendingSync]=useState(false);
  const [offlineReady,setOfflineReady]=useState(false);
  const [offlineDownloading,setOfflineDownloading]=useState(false);
+ const [offlineMessage,setOfflineMessage]=useState('');
  const [installPrompt,setInstallPrompt]=useState<InstallPromptEvent|null>(null);
  const [boardUndo,setBoardUndo]=useState<TripState|null>(null);
+ const [liveLocation,setLiveLocation]=useState<AssistantLocation|null>(null);
+ const [locationStatus,setLocationStatus]=useState<'idle'|'requesting'|'active'|'error'>('idle');
+ const [locationMessage,setLocationMessage]=useState('');
 
  useEffect(()=>{
   let active=true;
@@ -108,11 +114,16 @@ export default function TripApp(){
  useEffect(()=>{
   if(!('serviceWorker'in navigator))return;
   void navigator.serviceWorker.register('/sw.js');
-  const handleMessage=(event:MessageEvent<{type?:string}>)=>{
+  const handleMessage=(event:MessageEvent<{type?:string;message?:string}>)=>{
    if(event.data?.type==='TRIP_CACHED'){
     localStorage.setItem(offlineReadyKey,'true');
     setOfflineReady(true);
     setOfflineDownloading(false);
+    setOfflineMessage('Offline copy updated.');
+   }
+   if(event.data?.type==='TRIP_CACHE_FAILED'){
+    setOfflineDownloading(false);
+    setOfflineMessage(event.data.message??'Offline download failed. Please try again.');
    }
   };
   navigator.serviceWorker.addEventListener('message',handleMessage);
@@ -166,7 +177,9 @@ export default function TripApp(){
  async function downloadOffline(){
   if(!('serviceWorker'in navigator))return;
   setOfflineDownloading(true);
+  setOfflineMessage('');
   const registration=await navigator.serviceWorker.ready;
+  await registration.update();
   registration.active?.postMessage({type:'CACHE_TRIP'});
  }
  async function installApp(){
@@ -174,6 +187,27 @@ export default function TripApp(){
   await installPrompt.prompt();
   await installPrompt.userChoice;
   setInstallPrompt(null);
+ }
+ function requestLocation(){
+  if(!navigator.geolocation){
+   setLocationStatus('error');
+   setLocationMessage('Location is not available in this browser.');
+   return;
+  }
+  setLocationStatus('requesting');
+  setLocationMessage('');
+  navigator.geolocation.getCurrentPosition(position=>{
+   setLiveLocation({latitude:position.coords.latitude,longitude:position.coords.longitude,label:'your current location'});
+   setLocationStatus('active');
+  },error=>{
+   setLocationStatus('error');
+   setLocationMessage(error.code===error.PERMISSION_DENIED?'Location permission was not granted. You can continue using itinerary-based suggestions.':'Your location could not be determined. Try again when you have a stronger signal.');
+  },{enableHighAccuracy:false,timeout:12000,maximumAge:300000});
+ }
+ function stopUsingLocation(){
+  setLiveLocation(null);
+  setLocationStatus('idle');
+  setLocationMessage('');
  }
  function toggleDay(di:number,ii:number){if(!state)return;const next=structuredClone(state);next.days[di].items[ii].done=!next.days[di].items[ii].done;void persist(next);}
  function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='fixed')item[key]=Boolean(value);else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
@@ -290,7 +324,7 @@ export default function TripApp(){
  const nextStep=nextStepIndex>=0?currentDay?.items[nextStepIndex]:undefined;
  const filtered=useMemo(()=>{if(!state)return[];const needle=query.trim().toLowerCase();return state.places.filter(place=>(region==='All'||place.region===region)&&(category==='All'||place.category===category)&&(priority==='All'||place.priority===priority)&&(showVisited||!place.visited)&&(!needle||`${place.name} ${place.notes} ${place.tags.join(' ')}`.toLowerCase().includes(needle)));},[state,query,region,category,priority,showVisited]);
  const nearbySuggestions=useMemo(()=>{if(!state||!currentDay)return[];const rank={must:0,possible:1,backup:2};return state.places.filter(place=>placeMatchesDay(place,currentDay.city,currentDay.date)&&!place.visited).sort((a,b)=>rank[a.priority]-rank[b.priority]).slice(0,6);},[state,currentDay]);
- const assistant=useMemo(()=>state?buildAssistantState(state,now):null,[state,now]);
+ const assistant=useMemo(()=>state?buildAssistantState(state,now,liveLocation??undefined):null,[state,now,liveLocation]);
  const reservations=useMemo(()=>state?state.days.flatMap(day=>day.items.flatMap(item=>isFixedItem(item)?[{day,item}]:[])):[],[state]);
 
  if(!state)return <main className="shell"><div className="card">Loading trip…</div></main>;
@@ -302,7 +336,7 @@ export default function TripApp(){
 
  const syncLabel=!online?'● Offline · changes save here':pendingSync?'○ Waiting to sync':cloud?'● Shared sync':'○ Device only';
  return <>
-  <header className="hero"><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>Toronto · Niagara · Buffalo</h1><p>September 24–October 1, 2026</p></div><div className="headerActions"><span className={`sync ${online&&cloud&&!pendingSync?'online':''} ${!online?'offline':''}`}>{syncLabel}</span><button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}</div></div></header>
+  <header className="hero"><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>Toronto · Niagara · Buffalo</h1><p>September 24–October 1, 2026</p></div><div className="headerActions"><span className={`sync ${online&&cloud&&!pendingSync?'online':''} ${!online?'offline':''}`}>{syncLabel}</span><button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}{offlineMessage&&<span className="offlineMessage" role="status">{offlineMessage}</span>}</div></div></header>
   <main className="shell">
    <nav className="tabs" aria-label="Trip sections">{tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item}</button>)}</nav>
    {tab==='Today'&&currentDay&&<section>
@@ -314,7 +348,7 @@ export default function TripApp(){
     <div className="between sectionHeading"><h2 className="sectionTitle">Recommended for this day</h2><button className="textButton" onClick={()=>{setRegion(currentDay.city.includes('Toronto')?'Toronto':'Niagara & Buffalo');setTab('Places');}}>See all</button></div>
     <div className="grid compactGrid">{nearbySuggestions.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>
    </section>}
-   {tab==='Assistant'&&assistant&&<AssistantView assistant={assistant} tripState={state} now={now} onComplete={item=>{
+   {tab==='Assistant'&&assistant&&<AssistantView assistant={assistant} tripState={state} now={now} liveLocation={liveLocation} locationStatus={locationStatus} locationMessage={locationMessage} onRequestLocation={requestLocation} onStopLocation={stopUsingLocation} onComplete={item=>{
     const day=state.days[assistant.currentDayIndex];
     const itemIndex=day?.items.findIndex(candidate=>candidate.id===item.id)??-1;
     if(itemIndex>=0)toggleDay(assistant.currentDayIndex,itemIndex);
@@ -422,12 +456,67 @@ function ReservationsView({reservations,onShowItem}:{reservations:ReservationEnt
      {keyInfo&&<div className="reservationSection keyInfo"><strong>Key Info</strong><p>{keyInfo}</p></div>}
      {item.userNotes&&<div className="reservationSection"><strong>Notes</strong><p>{item.userNotes}</p></div>}
      {item.routeText&&<p className="muted small reservationRoute">🚌 {item.routeText}</p>}
+     <ReservationAttachments item={item}/>
      <div className="placeActions reservationActions">{item.mapUrl&&<a className="btn primary" href={item.mapUrl} target="_blank" rel="noreferrer">Open directions</a>}<button className="btn" onClick={()=>onShowItem(item.id)}>View in itinerary</button></div>
     </article>;
    })}</div>
   </div>)}
   {reservations.length===0&&<div className="card empty">Mark an itinerary item as a fixed plan to see it here.</div>}
  </section>;
+}
+
+type AttachmentWithUrl=ReservationAttachment&{url:string};
+
+function ReservationAttachments({item}:{item:ItineraryItem}){
+ const [attachments,setAttachments]=useState<AttachmentWithUrl[]>([]);
+ const [revision,setRevision]=useState(0);
+ const [busy,setBusy]=useState(false);
+ const [message,setMessage]=useState('');
+ useEffect(()=>{
+  let active=true;
+  const urls:string[]=[];
+  void listReservationAttachments(item.id).then(records=>{
+   if(!active)return;
+   const next=records.map(record=>{const url=URL.createObjectURL(record.file);urls.push(url);return {...record,url};});
+   setAttachments(next);
+  }).catch(()=>{if(active)setMessage('Attachments are unavailable in this browser.');});
+  return()=>{active=false;urls.forEach(url=>URL.revokeObjectURL(url));};
+ },[item.id,revision]);
+ async function addFiles(files:FileList|null){
+  if(!files?.length)return;
+  setBusy(true);
+  setMessage('');
+  try{
+   const existing=await listReservationAttachments(item.id);
+   const incoming=[...files].slice(0,Math.max(0,8-existing.length));
+   if(!incoming.length)throw new Error('This reservation already has the maximum of 8 files.');
+   const oversized=incoming.find(file=>file.size>10*1024*1024);
+   if(oversized)throw new Error(`${oversized.name} is larger than the 10 MB limit.`);
+   await Promise.all(incoming.map(file=>saveReservationAttachment(item.id,file)));
+   setRevision(value=>value+1);
+   setMessage(`${incoming.length} file${incoming.length===1?'':'s'} saved on this device.`);
+  }catch(error){setMessage(error instanceof Error?error.message:'The files could not be saved.');}
+  finally{setBusy(false);}
+ }
+ async function removeAttachment(attachment:AttachmentWithUrl){
+  if(!window.confirm(`Remove “${attachment.name}” from this device?`))return;
+  try{
+   await deleteReservationAttachment(attachment.id);
+   setRevision(value=>value+1);
+   setMessage('File removed from this device.');
+  }catch{setMessage('The file could not be removed.');}
+ }
+ return <div className="reservationAttachments">
+  <div className="between"><div><strong>Files</strong><p>Saved only on this device and available offline.</p></div><label className={`btn attachmentUpload ${busy?'disabled':''}`}>{busy?'Saving…':'Add file'}<input type="file" accept="image/*,application/pdf" multiple disabled={busy} onChange={event=>{void addFiles(event.target.files);event.currentTarget.value='';}}/></label></div>
+  {attachments.length>0&&<div className="attachmentList">{attachments.map(attachment=><div className="attachmentRow" key={attachment.id}><div><strong>{attachment.name}</strong><span>{formatFileSize(attachment.size)}</span></div><div className="placeActions"><a className="textLink" href={attachment.url} target="_blank" rel="noreferrer">Open</a><a className="textLink" href={attachment.url} download={attachment.name}>Download</a><button className="textButton dangerText" onClick={()=>void removeAttachment(attachment)}>Remove</button></div></div>)}</div>}
+  {message&&<p className="attachmentMessage" role="status">{message}</p>}
+ </div>;
+}
+
+function formatFileSize(bytes:number){
+ if(bytes<1024)return `${bytes} B`;
+ if(bytes<1024*1024)return `${Math.round(bytes/1024)} KB`;
+ return `${(bytes/(1024*1024)).toFixed(1)} MB`;
 }
 
 function ItineraryEditor({item,dayIndex,itemIndex,days,places,hoursCheck,onEdit,onSave,onMove,onReorder,onDelete,onShowPlace}:{item:ItineraryItem;dayIndex:number;itemIndex:number;days:TripState['days'];places:Place[];hoursCheck?:ItineraryHoursCheck;onEdit:(di:number,ii:number,key:EditableKey,value:EditableValue)=>void;onSave:()=>void;onMove:(di:number,ii:number,target:number)=>void;onReorder:(di:number,ii:number,direction:-1|1)=>void;onDelete:(di:number,ii:number)=>void;onShowPlace:(place:Place)=>void}){
@@ -507,11 +596,11 @@ function statusLabel(status:AssistantState['status']){
  return 'Plenty of flexibility';
 }
 
-function AssistantView({assistant,tripState,now,onComplete,onVisited,onShowPlaces}:{assistant:AssistantState;tripState:TripState;now:Date;onComplete:(item:ItineraryItem)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void}){
+function AssistantView({assistant,tripState,now,liveLocation,locationStatus,locationMessage,onRequestLocation,onStopLocation,onComplete,onVisited,onShowPlaces}:{assistant:AssistantState;tripState:TripState;now:Date;liveLocation:AssistantLocation|null;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onComplete:(item:ItineraryItem)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void}){
  const [extraMinutes,setExtraMinutes]=useState<number|null>(null);
  const actionItem=assistant.currentActivity??assistant.nextReservation??assistant.nextItem;
  const fixedItem=assistant.nextReservation;
- const extraSuggestions=useMemo(()=>assistant.currentDay&&extraMinutes?findSuggestionCandidates(tripState,assistant.currentDay,extraMinutes,6,{anchor:assistant.suggestionAnchor,now}):[],[assistant.currentDay,assistant.suggestionAnchor,extraMinutes,now,tripState]);
+ const extraSuggestions=useMemo(()=>assistant.currentDay&&extraMinutes?findSuggestionCandidates(tripState,assistant.currentDay,extraMinutes,6,{anchor:assistant.suggestionAnchor,location:liveLocation??undefined,now}):[],[assistant.currentDay,assistant.suggestionAnchor,extraMinutes,liveLocation,now,tripState]);
  const displayedSuggestions:SuggestedPlace[]=extraMinutes?extraSuggestions:assistant.suggestions;
  return <section className="assistantPage">
   <div className={`card assistantHero assistant-${assistant.status}`}>
@@ -520,6 +609,10 @@ function AssistantView({assistant,tripState,now,onComplete,onVisited,onShowPlace
    <h2>{assistant.headline}</h2>
    <p>{assistant.subheadline}</p>
    {assistant.notices.map((notice,index)=><div className={`assistantNotice notice-${notice.type}`} key={`${notice.type}-${index}`}>{notice.message}</div>)}
+   <div className="locationControl">
+    <div><strong>{liveLocation?'Using your current location':'Nearby suggestions'}</strong><span>{liveLocation?'Your coordinates stay in this browser session and are not saved.':'Use your location for more accurate nearby ideas, or keep itinerary-based ranking.'}</span>{locationMessage&&<span className="locationError" role="status">{locationMessage}</span>}</div>
+    <div className="placeActions">{liveLocation&&<button className="btn" onClick={onStopLocation}>Stop using location</button>}<button className="btn" onClick={onRequestLocation} disabled={locationStatus==='requesting'}>{locationStatus==='requesting'?'Finding you…':liveLocation?'Refresh location':'Use my current location'}</button></div>
+   </div>
    <div className="extraTimeControl">
     <button className="btn" onClick={()=>setExtraMinutes(value=>value?null:60)}>{extraMinutes?'Close extra-time ideas':'I’ve got extra time'}</button>
     {extraMinutes&&<div className="timeChoices" aria-label="Available free time">

@@ -16,9 +16,16 @@ type SmartPlace=Place&{
  estimatedDuration?:number;
 };
 
+export type AssistantLocation={
+ latitude:number;
+ longitude:number;
+ label:string;
+};
+
 type SuggestionContext={
  anchor?:ItineraryItem;
  anchorPlace?:Place;
+ location?:AssistantLocation;
  now?:Date;
 };
 
@@ -133,8 +140,7 @@ function placeForItem(state:TripState,item?:ItineraryItem){
  });
 }
 
-export function distanceBetweenPlaces(from:Place,to:Place){
- if(!placeHasCoordinates(from)||!placeHasCoordinates(to))return undefined;
+function distanceBetweenCoordinates(from:{latitude:number;longitude:number},to:{latitude:number;longitude:number}){
  const radians=(degrees:number)=>degrees*Math.PI/180;
  const earthRadiusKm=6371;
  const latitudeDelta=radians(to.latitude-from.latitude);
@@ -143,6 +149,11 @@ export function distanceBetweenPlaces(from:Place,to:Place){
  const endLatitude=radians(to.latitude);
  const a=Math.sin(latitudeDelta/2)**2+Math.cos(startLatitude)*Math.cos(endLatitude)*Math.sin(longitudeDelta/2)**2;
  return earthRadiusKm*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+export function distanceBetweenPlaces(from:Place,to:Place){
+ if(!placeHasCoordinates(from)||!placeHasCoordinates(to))return undefined;
+ return distanceBetweenCoordinates(from,to);
 }
 
 function approximateWalkingMinutes(distanceKm:number){
@@ -308,7 +319,8 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
  else {score+=5;reasons.push('A useful backup option');}
  if(place.recommendedDates?.includes(day.date)){score+=30;reasons.push('Recommended for this day');}
  if(placeMatchesDay(place,day)){score+=15;reasons.push(`Fits your ${day.city} plans`);}
- const distanceKm=context.anchorPlace?distanceBetweenPlaces(context.anchorPlace,place):undefined;
+ const anchorLocation=context.location??(placeHasCoordinates(context.anchorPlace)?{latitude:context.anchorPlace.latitude,longitude:context.anchorPlace.longitude,label:context.anchorPlace.name}:undefined);
+ const distanceKm=anchorLocation&&placeHasCoordinates(place)?distanceBetweenCoordinates(anchorLocation,place):undefined;
  const walkingMinutes=distanceKm!==undefined?approximateWalkingMinutes(distanceKm):undefined;
  if(distanceKm!==undefined){
   if(distanceKm<=0.5)score+=32;
@@ -316,7 +328,7 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
   else if(distanceKm<=2)score+=15;
   else if(distanceKm<=4)score+=5;
   else if(distanceKm>8)score-=30;
-  reasons.push(`${distanceLabel(distanceKm)} from ${context.anchorPlace?.name}${walkingMinutes!==undefined?` · about ${walkingMinutes} min walking`:''}`);
+  reasons.push(`${distanceLabel(distanceKm)} from ${anchorLocation?.label}${walkingMinutes!==undefined?` · about ${walkingMinutes} min walking`:''}`);
  }
  if(context.anchor){
   const anchorTokens=meaningfulTokens(`${context.anchor.title} ${context.anchor.destination??''} ${context.anchor.details??''}`);
@@ -402,7 +414,7 @@ function buildPresentation(args:{
  return {status,headline,subheadline,notices};
 }
 
-export function buildAssistantState(state:TripState,now=new Date()):AssistantState{
+export function buildAssistantState(state:TripState,now=new Date(),location?:AssistantLocation):AssistantState{
  if(!state.days.length){return {currentDayIndex:0,availableMinutes:0,status:'finished',headline:'No itinerary yet.',subheadline:'Add a day to begin using the trip assistant.',suggestions:[],notices:[],allRemainingFlexible:true};}
  const found=findCurrentDay(state,now);
  const day=found.day;
@@ -418,7 +430,7 @@ export function buildAssistantState(state:TripState,now=new Date()):AssistantSta
  const allRemainingFlexible=remaining.length>0&&remaining.every(item=>!isFixedItem(item));
  const presentation=buildPresentation({now,day,current,next,reservation,leaveBy,availableMinutes,allRemainingFlexible});
  const suggestionAnchor=current?.item??previous?.item??next?.item;
- const suggestions=(presentation.status==='explore'||presentation.status==='relax')&&availableMinutes>=30?findSuggestionCandidates(state,day,availableMinutes,3,{anchor:suggestionAnchor,now}):[];
+ const suggestions=(presentation.status==='explore'||presentation.status==='relax')&&availableMinutes>=30?findSuggestionCandidates(state,day,availableMinutes,3,{anchor:suggestionAnchor,location,now}):[];
  return {
   currentDay:day,
   currentDayIndex:found.index,
