@@ -1,4 +1,5 @@
 import type {ItineraryItem,ItineraryItemType,Place,TripDay,TripState,Weekday} from '@/lib/types';
+import {suggestPlaceArea} from '@/lib/place-areas';
 
 export type AssistantStatus='beforeTrip'|'relax'|'explore'|'leaveSoon'|'leaveNow'|'activity'|'finished';
 export type AssistantNoticeType='info'|'travel'|'timing';
@@ -22,11 +23,24 @@ export type AssistantLocation={
  label:string;
 };
 
-type SuggestionContext={
+export type SuggestionContext={
  anchor?:ItineraryItem;
  anchorPlace?:Place;
+ anchorArea?:string;
  location?:AssistantLocation;
  now?:Date;
+};
+
+export type NearbyFilters={
+ query?:string;
+ region?:string;
+ area?:string;
+ category?:string;
+ priority?:Place['priority']|'All';
+ availableMinutes?:number;
+ maxDistanceKm?:number;
+ openNowOnly?:boolean;
+ includeVisited?:boolean;
 };
 
 export interface AssistantNotice{
@@ -140,7 +154,7 @@ function placeForItem(state:TripState,item?:ItineraryItem){
  });
 }
 
-function distanceBetweenCoordinates(from:{latitude:number;longitude:number},to:{latitude:number;longitude:number}){
+export function distanceBetweenCoordinates(from:{latitude:number;longitude:number},to:{latitude:number;longitude:number}){
  const radians=(degrees:number)=>degrees*Math.PI/180;
  const earthRadiusKm=6371;
  const latitudeDelta=radians(to.latitude-from.latitude);
@@ -156,11 +170,11 @@ export function distanceBetweenPlaces(from:Place,to:Place){
  return distanceBetweenCoordinates(from,to);
 }
 
-function approximateWalkingMinutes(distanceKm:number){
+export function approximateWalkingMinutes(distanceKm:number){
  return Math.max(1,Math.round(distanceKm*16));
 }
 
-function distanceLabel(distanceKm:number){
+export function distanceLabel(distanceKm:number){
  if(distanceKm<1)return `${Math.max(50,Math.round(distanceKm*1000/50)*50)} m away`;
  return `${distanceKm.toFixed(distanceKm<10?1:0)} km away`;
 }
@@ -205,7 +219,7 @@ export function estimatedItemDuration(item:ItineraryItem){
  return DEFAULT_ACTIVITY_MINUTES;
 }
 
-function estimatedPlaceDuration(place:Place){
+export function estimatedPlaceDuration(place:Place){
  const smart=place as SmartPlace;
  if(smart.estimatedDuration&&smart.estimatedDuration>0)return smart.estimatedDuration;
  const text=`${place.category} ${place.notes} ${place.tags.join(' ')}`.toLowerCase();
@@ -320,9 +334,11 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
  if(place.recommendedDates?.includes(day.date)){score+=30;reasons.push('Recommended for this day');}
  if(placeMatchesDay(place,day)){score+=15;reasons.push(`Fits your ${day.city} plans`);}
  const anchorLocation=context.location??(placeHasCoordinates(context.anchorPlace)?{latitude:context.anchorPlace.latitude,longitude:context.anchorPlace.longitude,label:context.anchorPlace.name}:undefined);
- if(context.anchorPlace?.area&&place.area===context.anchorPlace.area){
+ const anchorArea=context.anchorArea??context.anchorPlace?.area;
+ const placeArea=place.area??suggestPlaceArea(place);
+ if(anchorArea&&placeArea===anchorArea){
   score+=18;
-  reasons.push(`In the same area: ${place.area}`);
+  reasons.push(`In the selected area: ${placeArea}`);
  }
  const distanceKm=anchorLocation&&placeHasCoordinates(place)?distanceBetweenCoordinates(anchorLocation,place):undefined;
  const walkingMinutes=distanceKm!==undefined?approximateWalkingMinutes(distanceKm):undefined;
@@ -376,6 +392,59 @@ export function findSuggestionCandidates(state:TripState,day:TripDay,availableMi
   if(selected.length===limit)break;
  }
  return selected;
+}
+
+export function findNearbyPlaces(
+ state:TripState,
+ day:TripDay,
+ now:Date,
+ location:AssistantLocation|undefined,
+ filters:NearbyFilters={},
+ limit=60
+):SuggestedPlace[]{
+ const availableMinutes=filters.availableMinutes??180;
+ const needle=filters.query?.trim().toLowerCase()??'';
+ return state.places
+  .filter(place=>{
+   if(!filters.includeVisited&&place.visited)return false;
+   if(filters.region&&filters.region!=='All'&&place.region!==filters.region)return false;
+   if(filters.area&&filters.area!=='All'&&(place.area??suggestPlaceArea(place))!==filters.area)return false;
+   if(filters.category&&filters.category!=='All'&&place.category!==filters.category)return false;
+   if(filters.priority&&filters.priority!=='All'&&place.priority!==filters.priority)return false;
+   if(needle&&!placeText(place).includes(needle))return false;
+   const open=placeOpenStatus(place,now);
+   if(filters.openNowOnly&&!['open','ignored'].includes(open.status))return false;
+   return true;
+  })
+  .map(place=>{
+   const result=scoreSuggestion(place,day,availableMinutes,{
+    location,
+    anchorArea:filters.area&&filters.area!=='All'?filters.area:undefined
+   });
+   const distanceKm=location&&placeHasCoordinates(place)?distanceBetweenCoordinates(location,place):undefined;
+   return {
+    place,
+    score:result.score,
+    reasons:result.reasons,
+    reason:result.reasons.join(' • '),
+    estimatedDuration:result.duration,
+    distanceKm,
+    walkingMinutes:distanceKm===undefined?undefined:approximateWalkingMinutes(distanceKm)
+   };
+  })
+  .filter(suggestion=>{
+   if(suggestion.estimatedDuration>availableMinutes)return false;
+   if(filters.maxDistanceKm!==undefined&&suggestion.distanceKm!==undefined&&suggestion.distanceKm>filters.maxDistanceKm)return false;
+   return true;
+  })
+  .sort((a,b)=>{
+   if(location){
+    const distance=(a.distanceKm??Number.POSITIVE_INFINITY)-(b.distanceKm??Number.POSITIVE_INFINITY);
+    if(distance!==0)return distance;
+   }
+   return b.score-a.score||a.estimatedDuration-b.estimatedDuration||a.place.name.localeCompare(b.place.name);
+  })
+  .slice(0,limit);
 }
 
 function greeting(now:Date){

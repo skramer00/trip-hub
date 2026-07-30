@@ -1,7 +1,7 @@
 'use client';
 
 import {useEffect,useMemo,useState} from 'react';
-import {buildAssistantState,estimatedItemDuration,findSuggestionCandidates,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
+import {buildAssistantState,estimatedItemDuration,findNearbyPlaces,findSuggestionCandidates,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
 import {checkItineraryHours} from '@/lib/place-hours';
 import {areaOptions,suggestedAreaNames,suggestPlaceArea} from '@/lib/place-areas';
 import {deleteReservationAttachment,listReservationAttachments,saveReservationAttachment} from '@/lib/attachments';
@@ -10,8 +10,15 @@ import type {ItineraryHoursCheck} from '@/lib/place-hours';
 import type {AssistantLocation,AssistantState,SuggestedPlace} from '@/lib/assistant';
 import type {ItineraryItem,Place,TripState,Weekday} from '@/lib/types';
 
-const tabs=['Today','Assistant','Board','Itinerary','Reservations','Food','Places','Hours','Checklist'] as const;
+const tabs=['Today','Assistant','Nearby','Board','Itinerary','Reservations','Food','Places','Hours','Checklist'] as const;
 type Tab=(typeof tabs)[number];
+const navGroups=[
+ {label:'Today',tabs:['Today','Assistant'] as Tab[]},
+ {label:'Plan',tabs:['Board','Itinerary','Reservations'] as Tab[]},
+ {label:'Explore',tabs:['Nearby','Places','Hours'] as Tab[]},
+ {label:'Food',tabs:['Food'] as Tab[]},
+ {label:'Checklist',tabs:['Checklist'] as Tab[]}
+] as const;
 type InstallPromptEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
 
 type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'userNotes'|'optional'|'fixed'|'type'|'estimatedDuration'|'travelMinutes'|'prepBuffer'|'placeId';
@@ -216,6 +223,33 @@ export default function TripApp(){
  function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='fixed')item[key]=Boolean(value);else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
  function saveEdits(di?:number){const latest=readLocalState()??state;if(!latest)return;const next=structuredClone(latest);if(di!==undefined)next.days[di].items=sortItems(next.days[di].items);void persist(next);}
  function addItem(di:number){if(!state)return;const next=structuredClone(state);next.days[di].items.push({id:`custom-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:'12:00 PM',title:'New stop',details:'',destination:'',routeText:'',keyInfo:'',userNotes:'',done:false,optional:false,fixed:false,type:'activity',estimatedDuration:60,travelMinutes:20,prepBuffer:15});next.days[di].items=sortItems(next.days[di].items);void persist(next);}
+ function addPlaceToItinerary(place:Place,di:number){
+  if(!state)return;
+  const next=structuredClone(state);
+  const category=`${place.category} ${place.tags.join(' ')}`.toLowerCase();
+  const type:ItineraryItem['type']=/restaurant|food|bakery|coffee|dessert|candy|bar/.test(category)?'food':/hotel/.test(category)?'hotel':/transit|station|airport/.test(category)?'travel':'activity';
+  const destination=place.formattedAddress||place.name;
+  next.days[di].items.push({
+   id:`place-stop-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+   time:'Flexible',
+   title:place.name,
+   details:place.notes,
+   destination,
+   mapUrl:mapsUrl(destination),
+   routeText:'Open transit directions from your current location.',
+   keyInfo:'',
+   userNotes:'',
+   done:false,
+   optional:false,
+   fixed:false,
+   type,
+   estimatedDuration:place.estimatedDuration??60,
+   travelMinutes:20,
+   prepBuffer:15,
+   placeId:place.id
+  });
+  void persist(next);
+ }
  function deleteItem(di:number,ii:number){if(!state||!window.confirm(`Delete “${state.days[di].items[ii].title}”?`))return;const next=structuredClone(state);next.days[di].items.splice(ii,1);void persist(next);}
  function moveItem(di:number,ii:number,target:number){if(!state||target===di)return;const next=structuredClone(state);const [item]=next.days[di].items.splice(ii,1);next.days[target].items.push(item);next.days[target].items=sortItems(next.days[target].items);void persist(next);}
  function reorderItem(di:number,ii:number,direction:-1|1){if(!state)return;const target=ii+direction;if(target<0||target>=state.days[di].items.length)return;const next=structuredClone(state);[next.days[di].items[ii],next.days[di].items[target]]=[next.days[di].items[target],next.days[di].items[ii]];void persist(next);}
@@ -346,6 +380,7 @@ export default function TripApp(){
  const nearbySuggestions=useMemo(()=>{if(!state||!currentDay)return[];const rank={must:0,possible:1,backup:2};return state.places.filter(place=>placeMatchesDay(place,currentDay.city,currentDay.date)&&!place.visited).sort((a,b)=>rank[a.priority]-rank[b.priority]).slice(0,6);},[state,currentDay]);
  const assistant=useMemo(()=>state?buildAssistantState(state,now,liveLocation??undefined):null,[state,now,liveLocation]);
  const reservations=useMemo(()=>state?state.days.flatMap(day=>day.items.flatMap(item=>isFixedItem(item)?[{day,item}]:[])):[],[state]);
+ const activeNavGroup=navGroups.find(group=>group.tabs.includes(tab))??navGroups[0];
 
  if(!state)return <main className="shell"><div className="card">Loading trip…</div></main>;
  const completedToday=currentDay?.items.filter(i=>i.done).length??0;
@@ -358,7 +393,8 @@ export default function TripApp(){
  return <>
   <header className="hero"><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>Toronto · Niagara · Buffalo</h1><p>September 24–October 1, 2026</p></div><div className="headerActions"><span className={`sync ${online&&cloud&&!pendingSync?'online':''} ${!online?'offline':''}`}>{syncLabel}</span><button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}{offlineMessage&&<span className="offlineMessage" role="status">{offlineMessage}</span>}</div></div></header>
   <main className="shell">
-   <nav className="tabs" aria-label="Trip sections">{tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item}</button>)}</nav>
+   <nav className="tabs mainTabs" aria-label="Trip sections">{navGroups.map(group=><button key={group.label} className={activeNavGroup.label===group.label?'active':''} onClick={()=>setTab(group.tabs[0])}>{group.label}</button>)}</nav>
+   {activeNavGroup.tabs.length>1&&<nav className="subTabs" aria-label={`${activeNavGroup.label} views`}>{activeNavGroup.tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item==='Places'?'Saved Places':item}</button>)}</nav>}
    {tab==='Today'&&currentDay&&<section>
     <div className="todayHero card"><div><div className="eyebrow">TODAY</div><h2>{currentDay.label} · {currentDay.city}</h2><p className="muted">Recommendations below are selected for this specific itinerary day.</p></div><div className="progressRing" aria-label={`${completedToday} of ${totalToday} complete`}><strong>{completedToday}/{totalToday}</strong><span>done</span></div></div>
     {nextStep?<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><div className="between" style={{alignItems:'flex-start',gap:'16px',marginTop:'6px'}}><div><h2 style={{marginBottom:'4px'}}>{nextStep.title}</h2><div className="muted">{nextStep.time}</div>{nextStep.details&&<p>{nextStep.details}</p>}{nextStep.routeText&&<p className="muted small">🚌 {nextStep.routeText}</p>}{(nextStep.keyInfo||nextStep.confirmationNumber)&&<div style={{marginTop:'12px'}}><strong>Key Info</strong><p style={{whiteSpace:'pre-wrap',marginTop:'4px'}}>{nextStep.keyInfo??nextStep.confirmationNumber}</p></div>}</div><span className="chip">{nextStepIndex+1} of {currentDay.items.length}</span></div><div className="placeActions" style={{marginTop:'14px'}}>{nextStep.mapUrl&&<a className="btn primary" href={nextStep.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}<button className="btn" onClick={()=>toggleDay(currentDayIndex,nextStepIndex)}>Mark complete</button></div></div>:<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><h2 style={{marginTop:'6px'}}>You’re done for today</h2><p className="muted">Every itinerary item for this day is complete.</p></div>}
@@ -373,6 +409,14 @@ export default function TripApp(){
     const itemIndex=day?.items.findIndex(candidate=>candidate.id===item.id)??-1;
     if(itemIndex>=0)toggleDay(assistant.currentDayIndex,itemIndex);
    }} onVisited={toggleVisited} onShowPlaces={place=>{
+    setQuery(place.name);
+    setRegion(place.region);
+    setArea('All');
+    setCategory('All');
+    setPriority('All');
+    setTab('Places');
+   }} onExploreNearby={()=>setTab('Nearby')}/>}
+   {tab==='Nearby'&&currentDay&&<NearbyExplorer state={state} currentDayIndex={currentDayIndex} now={now} liveLocation={liveLocation} locationStatus={locationStatus} locationMessage={locationMessage} onRequestLocation={requestLocation} onStopLocation={stopUsingLocation} onVisited={toggleVisited} onAddToItinerary={addPlaceToItinerary} onShowPlace={place=>{
     setQuery(place.name);
     setRegion(place.region);
     setArea('All');
@@ -641,7 +685,7 @@ function statusLabel(status:AssistantState['status']){
  return 'Plenty of flexibility';
 }
 
-function AssistantView({assistant,tripState,now,liveLocation,locationStatus,locationMessage,onRequestLocation,onStopLocation,onComplete,onVisited,onShowPlaces}:{assistant:AssistantState;tripState:TripState;now:Date;liveLocation:AssistantLocation|null;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onComplete:(item:ItineraryItem)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void}){
+function AssistantView({assistant,tripState,now,liveLocation,locationStatus,locationMessage,onRequestLocation,onStopLocation,onComplete,onVisited,onShowPlaces,onExploreNearby}:{assistant:AssistantState;tripState:TripState;now:Date;liveLocation:AssistantLocation|null;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onComplete:(item:ItineraryItem)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void;onExploreNearby:()=>void}){
  const [extraMinutes,setExtraMinutes]=useState<number|null>(null);
  const actionItem=assistant.currentActivity??assistant.nextReservation??assistant.nextItem;
  const fixedItem=assistant.nextReservation;
@@ -656,8 +700,9 @@ function AssistantView({assistant,tripState,now,liveLocation,locationStatus,loca
    {assistant.notices.map((notice,index)=><div className={`assistantNotice notice-${notice.type}`} key={`${notice.type}-${index}`}>{notice.message}</div>)}
    <div className="locationControl">
     <div><strong>{liveLocation?'Using your current location':'Nearby suggestions'}</strong><span>{liveLocation?'Your coordinates stay in this browser session and are not saved.':'Use your location for more accurate nearby ideas, or keep itinerary-based ranking.'}</span>{locationMessage&&<span className="locationError" role="status">{locationMessage}</span>}</div>
-    <div className="placeActions">{liveLocation&&<button className="btn" onClick={onStopLocation}>Stop using location</button>}<button className="btn" onClick={onRequestLocation} disabled={locationStatus==='requesting'}>{locationStatus==='requesting'?'Finding you…':liveLocation?'Refresh location':'Use my current location'}</button></div>
+   <div className="placeActions">{liveLocation&&<button className="btn" onClick={onStopLocation}>Stop using location</button>}<button className="btn" onClick={onRequestLocation} disabled={locationStatus==='requesting'}>{locationStatus==='requesting'?'Finding you…':liveLocation?'Refresh location':'Use my current location'}</button></div>
    </div>
+   <button className="btn primary assistantNearbyButton" onClick={onExploreNearby}>Explore everything nearby</button>
    <div className="extraTimeControl">
     <button className="btn" onClick={()=>setExtraMinutes(value=>value?null:60)}>{extraMinutes?'Close extra-time ideas':'I’ve got extra time'}</button>
     {extraMinutes&&<div className="timeChoices" aria-label="Available free time">
@@ -700,6 +745,71 @@ function AssistantView({assistant,tripState,now,liveLocation,locationStatus,loca
 
   {extraMinutes&&displayedSuggestions.length===0&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">✦</div><h2>No saved places fit that window yet.</h2><p className="muted">Try a longer time window or browse all saved places.</p></div>}
   {!extraMinutes&&assistant.suggestions.length===0&&!actionItem&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">✦</div><h2>Nothing you need to do right now.</h2><p className="muted">Enjoy the open time. Your itinerary and saved places are still available whenever you want them.</p></div>}
+ </section>;
+}
+
+function NearbyExplorer({state,currentDayIndex,now,liveLocation,locationStatus,locationMessage,onRequestLocation,onStopLocation,onVisited,onAddToItinerary,onShowPlace}:{state:TripState;currentDayIndex:number;now:Date;liveLocation:AssistantLocation|null;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onVisited:(id:string)=>void;onAddToItinerary:(place:Place,dayIndex:number)=>void;onShowPlace:(place:Place)=>void}){
+ const defaultRegion=state.days[currentDayIndex]?.city.includes('Toronto')?'Toronto':'Niagara & Buffalo';
+ const [selectedRegion,setSelectedRegion]=useState(defaultRegion);
+ const [selectedArea,setSelectedArea]=useState('All');
+ const [selectedCategory,setSelectedCategory]=useState('All');
+ const [selectedPriority,setSelectedPriority]=useState<'All'|Place['priority']>('All');
+ const [availableMinutes,setAvailableMinutes]=useState(60);
+ const [maxDistanceKm,setMaxDistanceKm]=useState(2);
+ const [openNowOnly,setOpenNowOnly]=useState(true);
+ const [includeVisited,setIncludeVisited]=useState(false);
+ const [nearbyQuery,setNearbyQuery]=useState('');
+ const [targetDayIndex,setTargetDayIndex]=useState(currentDayIndex);
+ const [addedMessage,setAddedMessage]=useState('');
+ const day=state.days[targetDayIndex]??state.days[currentDayIndex];
+ const areaChoices=useMemo(()=>areaOptions(state.places.filter(place=>selectedRegion==='All'||place.region===selectedRegion)),[selectedRegion,state.places]);
+ const results=useMemo(()=>findNearbyPlaces(state,day,now,liveLocation??undefined,{
+  query:nearbyQuery,
+  region:selectedRegion,
+  area:selectedArea,
+  category:selectedCategory,
+  priority:selectedPriority,
+  availableMinutes,
+  maxDistanceKm:liveLocation?maxDistanceKm:undefined,
+  openNowOnly,
+  includeVisited
+ },60),[availableMinutes,day,includeVisited,liveLocation,maxDistanceKm,nearbyQuery,now,openNowOnly,selectedArea,selectedCategory,selectedPriority,selectedRegion,state]);
+ function add(place:Place){
+  onAddToItinerary(place,targetDayIndex);
+  setAddedMessage(`${place.name} was added to ${state.days[targetDayIndex].label} as a flexible stop.`);
+ }
+ return <section className="nearbyPage">
+  <div className="pageIntro"><div><div className="eyebrow">NEARBY EXPLORER</div><h2>What sounds good nearby?</h2><p className="muted">Browse possibilities without committing to them. Closed places and options that do not fit your available time can stay out of the way.</p></div><span className="chip">{results.length} option{results.length===1?'':'s'}</span></div>
+  <div className="card nearbyControls">
+   <div className="nearbyLocationPanel">
+    <div><strong>{liveLocation?'Using your current location':'Choose an area or use your location'}</strong><p className="muted small">{liveLocation?'Results with saved coordinates are sorted by distance. Your location is not saved.':'Neighborhood mode works even when a place does not have coordinates yet.'}</p>{locationMessage&&<span className="locationError" role="status">{locationMessage}</span>}</div>
+    <div className="placeActions">{liveLocation&&<button className="btn" onClick={onStopLocation}>Use neighborhood instead</button>}<button className="btn primary" onClick={onRequestLocation} disabled={locationStatus==='requesting'}>{locationStatus==='requesting'?'Finding you…':liveLocation?'Refresh location':'Use my current location'}</button></div>
+   </div>
+   <div className="nearbyFilterGrid">
+    <label>Search<input className="field" value={nearbyQuery} onChange={event=>setNearbyQuery(event.target.value)} placeholder="Coffee, museum, poutine…"/></label>
+    <label>Region<select className="field" value={selectedRegion} onChange={event=>{setSelectedRegion(event.target.value);setSelectedArea('All');}}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select></label>
+    <label>Neighborhood<select className="field" value={selectedArea} onChange={event=>setSelectedArea(event.target.value)}><option>All</option>{areaChoices.map(value=><option value={value} key={value}>{value}</option>)}</select></label>
+    <label>Category<select className="field" value={selectedCategory} onChange={event=>setSelectedCategory(event.target.value)}><option>All</option>{[...new Set(state.places.map(place=>place.category))].sort().map(value=><option value={value} key={value}>{value}</option>)}</select></label>
+    <label>Priority<select className="field" value={selectedPriority} onChange={event=>setSelectedPriority(event.target.value as typeof selectedPriority)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></label>
+    <label>Time available<select className="field" value={availableMinutes} onChange={event=>setAvailableMinutes(Number(event.target.value))}><option value={30}>30 minutes</option><option value={60}>1 hour</option><option value={90}>90 minutes</option><option value={120}>2 hours</option><option value={240}>Half day</option></select></label>
+    {liveLocation&&<label>Maximum distance<select className="field" value={maxDistanceKm} onChange={event=>setMaxDistanceKm(Number(event.target.value))}><option value={0.5}>500 m</option><option value={1}>1 km</option><option value={2}>2 km</option><option value={5}>5 km</option><option value={15}>15 km</option></select></label>}
+    <label>Add results to<select className="field" value={targetDayIndex} onChange={event=>setTargetDayIndex(Number(event.target.value))}>{state.days.map((tripDay,index)=><option value={index} key={tripDay.date}>{tripDay.label} · {tripDay.city}</option>)}</select></label>
+   </div>
+   <div className="nearbyToggles"><label className="toggleLine"><input type="checkbox" checked={openNowOnly} onChange={event=>setOpenNowOnly(event.target.checked)}/> Open now or hours not required</label><label className="toggleLine"><input type="checkbox" checked={includeVisited} onChange={event=>setIncludeVisited(event.target.checked)}/> Include visited places</label></div>
+   {addedMessage&&<div className="nearbyAdded" role="status"><span>✓</span>{addedMessage}<button className="textButton" onClick={()=>setAddedMessage('')}>Dismiss</button></div>}
+  </div>
+  <div className="grid nearbyGrid">
+   {results.map(suggestion=>{const open=placeOpenStatus(suggestion.place,now);const directions=mapsUrl(suggestion.place.formattedAddress||suggestion.place.name);const displayArea=suggestion.place.area??suggestPlaceArea(suggestion.place);return <article className={`card nearbyCard ${suggestion.place.visited?'visited':''}`} key={suggestion.place.id}>
+    <div className="between"><span className={`priority priority-${suggestion.place.priority}`}>{suggestion.place.priority==='must'?'Must do':suggestion.place.priority}</span><span className={`hoursStatus hours-${open.status==='ignored'?'unknown':open.status}`}>{open.status==='open'?'Open now':open.status==='closed'?'Closed now':open.status==='ignored'?'Hours not needed':'Hours unknown'}</span></div>
+    <h3>{suggestion.place.name}</h3>
+    <div className="placeLocationMeta"><span className="chip neutral">{suggestion.place.category}</span>{displayArea&&<span className="areaBadge">{displayArea.split(' — ').at(-1)}</span>}</div>
+    <p className="nearbyFacts"><strong>{suggestion.estimatedDuration} min</strong>{suggestion.distanceKm!==undefined&&<span>{suggestion.distanceKm<1?`${Math.max(50,Math.round(suggestion.distanceKm*1000/50)*50)} m away`:`${suggestion.distanceKm.toFixed(1)} km away`}</span>}{suggestion.walkingMinutes!==undefined&&<span>≈ {suggestion.walkingMinutes} min walk</span>}</p>
+    {suggestion.place.notes&&<p className="muted small">{suggestion.place.notes}</p>}
+    <div className="whyBox"><strong>Why it fits</strong><ul>{suggestion.reasons.slice(0,3).map(reason=><li key={reason}>{reason}</li>)}</ul></div>
+    <div className="nearbyCardActions"><a className="btn" href={directions} target="_blank" rel="noreferrer">Transit directions</a><button className="btn primary" onClick={()=>add(suggestion.place)}>Add to {state.days[targetDayIndex].label}</button><button className="textButton" onClick={()=>onShowPlace(suggestion.place)}>Details</button><button className="textButton" onClick={()=>onVisited(suggestion.place.id)}>{suggestion.place.visited?'Mark unvisited':'Mark visited'}</button></div>
+   </article>;})}
+  </div>
+  {!results.length&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">⌖</div><h2>No saved places match this combination.</h2><p className="muted">Try a larger area, a longer time window, or turn off “Open now.”</p></div>}
  </section>;
 }
 
