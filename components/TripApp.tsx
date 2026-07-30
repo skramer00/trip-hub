@@ -5,7 +5,7 @@ import {buildAssistantState,estimatedItemDuration,findSuggestionCandidates,infer
 import type {AssistantState,SuggestedPlace} from '@/lib/assistant';
 import type {ItineraryItem,Place,TripState,Weekday} from '@/lib/types';
 
-const tabs=['Today','Assistant','Board','Itinerary','Reservations','Food','Places','Checklist'] as const;
+const tabs=['Today','Assistant','Board','Itinerary','Reservations','Food','Places','Hours','Checklist'] as const;
 type Tab=(typeof tabs)[number];
 type InstallPromptEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
 
@@ -231,6 +231,14 @@ export default function TripApp(){
   setState(next);
   localStorage.setItem(localStateKey,JSON.stringify(next));
  }
+ function replacePlaces(updated:Place[]){
+  if(!state)return;
+  const next=structuredClone(state);
+  const byId=new Map(updated.map(place=>[place.id,place]));
+  next.places=next.places.map(place=>byId.get(place.id)??place);
+  setState(next);
+  localStorage.setItem(localStateKey,JSON.stringify(next));
+ }
  function editPlaceHours(id:string,day:Weekday,changes:{open?:string;close?:string;closed?:boolean}){
   if(!state)return;
   const next=structuredClone(state);
@@ -325,6 +333,13 @@ export default function TripApp(){
    }}/>}
    {tab==='Food'&&<section><div className="pageIntro"><div><div className="eyebrow">LOCAL FLAVORS</div><h2>Eat the trip</h2></div><span className="chip">{state.foods.filter(i=>i.done).length}/{state.foods.length} tried</span></div>{['Try','Bring home'].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.foods.map((food,index)=>food.category===group&&<label className={`card checkCard ${food.done?'done':''}`} key={food.id}><input type="checkbox" checked={food.done} onChange={()=>toggleList('foods',index)}/><div><h3>{food.title}</h3>{food.notes&&<p className="muted small">{food.notes}</p>}</div></label>)}</div></div>)}</section>}
    {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>Find and manage places</h2></div><div className="placeActions"><span className="chip">{filtered.length} shown</span><button className="btn primary" onClick={addPlace}>+ Add place</button></div></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid"><select className="field" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)} onEdit={changes=>editPlace(place.id,changes)} onEditHours={(day,changes)=>editPlaceHours(place.id,day,changes)} onSave={savePlaceChanges} onGoogleUpdate={replacePlace} onDuplicate={()=>duplicatePlace(place.id)} onDelete={()=>deletePlace(place.id)} tripDates={state.days}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
+   {tab==='Hours'&&<HoursManager places={state.places} days={state.days} onUpdated={replacePlaces} onOpenPlace={place=>{
+    setQuery(place.name);
+    setRegion(place.region);
+    setCategory('All');
+    setPriority('All');
+    setTab('Places');
+   }}/>}
    {tab==='Checklist'&&<section><div className="pageIntro"><div><div className="eyebrow">PACK SMART</div><h2>Nothing important left behind</h2></div><span className="chip">{state.packing.filter(i=>i.done).length}/{state.packing.length} packed</span></div>{[...new Set(state.packing.map(i=>i.category))].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.packing.map((item,index)=>item.category===group&&<label className={`card checkCard ${item.done?'done':''}`} key={item.id}><input type="checkbox" checked={item.done} onChange={()=>toggleList('packing',index)}/><div>{item.title}</div></label>)}</div></div>)}</section>}
   </main>
  </>;
@@ -547,6 +562,127 @@ function AssistantView({assistant,tripState,now,onComplete,onVisited,onShowPlace
 
 const placeWeekdays:[Weekday,string][]=[['monday','Mon'],['tuesday','Tue'],['wednesday','Wed'],['thursday','Thu'],['friday','Fri'],['saturday','Sat'],['sunday','Sun']];
 
+type HoursFilter='all'|'missing'|'stale'|'google'|'manual';
+type RefreshResult={placeId:string;name:string;ok:boolean;matchedName?:string;matchWarning?:string;error?:string};
+
+function hoursAgeDays(place:Place){
+ if(!place.hoursVerifiedAt)return undefined;
+ const verified=new Date(place.hoursVerifiedAt).getTime();
+ if(!Number.isFinite(verified))return undefined;
+ return Math.max(0,Math.floor((Date.now()-verified)/86400000));
+}
+
+function hoursFilterStatus(place:Place):Exclude<HoursFilter,'all'>{
+ if(!Object.keys(place.weeklyHours??{}).length)return 'missing';
+ const age=hoursAgeDays(place);
+ if(age===undefined||age>=30)return 'stale';
+ return place.hoursSource==='google'?'google':'manual';
+}
+
+function hoursStatusCopy(place:Place){
+ const status=hoursFilterStatus(place);
+ if(status==='missing')return 'Hours missing';
+ if(status==='stale')return `Stale${hoursAgeDays(place)!==undefined?` · ${hoursAgeDays(place)} days old`:''}`;
+ if(status==='google')return `Google updated · ${hoursAgeDays(place)??0} days ago`;
+ return `Manual hours · ${hoursAgeDays(place)??0} days ago`;
+}
+
+function HoursManager({places,days,onUpdated,onOpenPlace}:{places:Place[];days:TripState['days'];onUpdated:(places:Place[])=>void;onOpenPlace:(place:Place)=>void}){
+ const [query,setQuery]=useState('');
+ const [regionFilter,setRegionFilter]=useState('All');
+ const [categoryFilter,setCategoryFilter]=useState('All');
+ const [priorityFilter,setPriorityFilter]=useState('All');
+ const [dayFilter,setDayFilter]=useState('All');
+ const [statusFilter,setStatusFilter]=useState<HoursFilter>('all');
+ const [selected,setSelected]=useState<Set<string>>(()=>new Set());
+ const [refreshing,setRefreshing]=useState(false);
+ const [results,setResults]=useState<RefreshResult[]>([]);
+ const categories=useMemo(()=>[...new Set(places.map(place=>place.category))].sort(),[places]);
+ const counts=useMemo(()=>places.reduce((total,place)=>{
+  total[hoursFilterStatus(place)]++;
+  return total;
+ },{missing:0,stale:0,google:0,manual:0}),[places]);
+ const visible=useMemo(()=>{
+  const needle=query.trim().toLowerCase();
+  return places.filter(place=>{
+   const status=hoursFilterStatus(place);
+   return (!needle||`${place.name} ${place.formattedAddress??''} ${place.notes}`.toLowerCase().includes(needle))
+    &&(regionFilter==='All'||place.region===regionFilter)
+    &&(categoryFilter==='All'||place.category===categoryFilter)
+    &&(priorityFilter==='All'||place.priority===priorityFilter)
+    &&(dayFilter==='All'||place.recommendedDates?.includes(dayFilter))
+    &&(statusFilter==='all'||status===statusFilter);
+  }).sort((a,b)=>{
+   const order={missing:0,stale:1,manual:2,google:3};
+   return order[hoursFilterStatus(a)]-order[hoursFilterStatus(b)]||a.name.localeCompare(b.name);
+  });
+ },[categoryFilter,dayFilter,places,priorityFilter,query,regionFilter,statusFilter]);
+
+ function toggleSelected(id:string){
+  setSelected(current=>{
+   const next=new Set(current);
+   if(next.has(id))next.delete(id);
+   else if(next.size<10)next.add(id);
+   return next;
+  });
+ }
+ function selectVisible(){
+  setSelected(new Set(visible.slice(0,10).map(place=>place.id)));
+ }
+ async function refresh(ids:string[]){
+  if(!ids.length)return;
+  if(ids.length>1&&!window.confirm(`Refresh ${ids.length} places from Google? This will use ${ids.length} Places requests.`))return;
+  const storedSecret=sessionStorage.getItem('places-refresh-secret');
+  const secret=storedSecret||window.prompt('Enter the Places refresh password');
+  if(!secret)return;
+  sessionStorage.setItem('places-refresh-secret',secret);
+  setRefreshing(true);
+  setResults([]);
+  try{
+   const response=await fetch('/api/places/refresh',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({placeIds:ids,secret})});
+   const result=await response.json() as {places?:Place[];results?:RefreshResult[];error?:string};
+   if(!response.ok)throw new Error(result.error||'Unable to refresh these places.');
+   if(result.places?.length)onUpdated(result.places);
+   setResults(result.results??[]);
+   setSelected(new Set());
+  }catch(error){
+   if(error instanceof Error&&error.message.includes('password'))sessionStorage.removeItem('places-refresh-secret');
+   setResults([{placeId:'batch',name:'Batch refresh',ok:false,error:error instanceof Error?error.message:'Unable to refresh these places.'}]);
+  }finally{setRefreshing(false);}
+ }
+
+ return <section className="hoursManager">
+  <div className="pageIntro"><div><div className="eyebrow">OPENING HOURS</div><h2>Keep recommendations current</h2><p className="muted">Refresh only the places you care about. Batches are capped at 10 Google requests.</p></div><span className="chip">{places.length} places</span></div>
+  <div className="hoursStats">
+   <button className={statusFilter==='missing'?'active':''} onClick={()=>setStatusFilter(statusFilter==='missing'?'all':'missing')}><span>Missing</span><strong>{counts.missing}</strong></button>
+   <button className={statusFilter==='stale'?'active':''} onClick={()=>setStatusFilter(statusFilter==='stale'?'all':'stale')}><span>Stale (30+ days)</span><strong>{counts.stale}</strong></button>
+   <button className={statusFilter==='google'?'active':''} onClick={()=>setStatusFilter(statusFilter==='google'?'all':'google')}><span>Google updated</span><strong>{counts.google}</strong></button>
+   <button className={statusFilter==='manual'?'active':''} onClick={()=>setStatusFilter(statusFilter==='manual'?'all':'manual')}><span>Manual</span><strong>{counts.manual}</strong></button>
+  </div>
+  <div className="card hoursToolbar">
+   <input className="field searchField" placeholder="Search places or addresses…" value={query} onChange={event=>setQuery(event.target.value)}/>
+   <div className="hoursFilters">
+    <select className="field" value={regionFilter} onChange={event=>setRegionFilter(event.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select>
+    <select className="field" value={categoryFilter} onChange={event=>setCategoryFilter(event.target.value)}><option>All</option>{categories.map(value=><option key={value}>{value}</option>)}</select>
+    <select className="field" value={priorityFilter} onChange={event=>setPriorityFilter(event.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select>
+    <select className="field" value={dayFilter} onChange={event=>setDayFilter(event.target.value)}><option>All</option>{days.map(day=><option value={day.date} key={day.date}>{day.label}</option>)}</select>
+   </div>
+   <div className="between hoursBatchBar"><div className="placeActions"><button className="btn" onClick={selectVisible} disabled={!visible.length}>Select first {Math.min(10,visible.length)}</button><button className="btn" onClick={()=>setSelected(new Set())} disabled={!selected.size}>Clear</button></div><div className="placeActions"><span className="chip neutral">{selected.size}/10 selected</span><button className="btn primary" onClick={()=>refresh([...selected])} disabled={!selected.size||refreshing}>{refreshing?'Refreshing…':`Refresh selected${selected.size?` (${selected.size})`:''}`}</button></div></div>
+  </div>
+  {results.length>0&&<div className="card refreshResults"><div className="between"><strong>Last refresh</strong><button className="textButton" onClick={()=>setResults([])}>Dismiss</button></div>{results.map(result=><div className={`refreshResult ${result.ok?'success':'failure'}`} key={result.placeId}><span>{result.ok?'✓':'!'}</span><div><strong>{result.name}</strong><p>{result.ok?(result.matchWarning??`Matched ${result.matchedName??result.name}`):result.error}</p></div></div>)}</div>}
+  <div className="hoursTable" role="table" aria-label="Saved place hours">
+   {visible.map(place=>{const status=hoursFilterStatus(place);const checked=selected.has(place.id);return <article className="hoursPlaceRow" role="row" key={place.id}>
+    <input type="checkbox" aria-label={`Select ${place.name}`} checked={checked} disabled={!checked&&selected.size>=10} onChange={()=>toggleSelected(place.id)}/>
+    <div className="hoursPlaceName"><strong>{place.name}</strong><span>{place.region} · {place.category}</span>{place.formattedAddress&&<small>{place.formattedAddress}</small>}</div>
+    <span className={`hoursStatus manager-${status}`}>{hoursStatusCopy(place)}</span>
+    <span className={`priority priority-${place.priority}`}>{place.priority==='must'?'Must do':place.priority}</span>
+    <div className="placeActions"><button className="btn" onClick={()=>refresh([place.id])} disabled={refreshing}>Refresh</button><button className="textButton" onClick={()=>onOpenPlace(place)}>Details</button></div>
+   </article>;})}
+  </div>
+  {!visible.length&&<div className="empty card">No places match these hours filters.</div>}
+ </section>;
+}
+
 function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDuplicate,onDelete,tripDates}:{place:Place;onToggle:()=>void;onEdit?:(changes:Partial<Place>)=>void;onEditHours?:(day:Weekday,changes:{open?:string;close?:string;closed?:boolean})=>void;onSave?:()=>void;onGoogleUpdate?:(place:Place)=>void;onDuplicate?:()=>void;onDelete?:()=>void;tripDates?:TripState['days']}){
  const [editing,setEditing]=useState(false);
  const [saved,setSaved]=useState(false);
@@ -572,10 +708,10 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDu
   setRefreshMessage('');
   try{
    const response=await fetch('/api/places/refresh',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({placeId:place.id,secret})});
-   const result=await response.json() as {place?:Place;matchedName?:string;error?:string};
+   const result=await response.json() as {place?:Place;matchedName?:string;matchWarning?:string;error?:string};
    if(!response.ok||!result.place)throw new Error(result.error||'Unable to refresh this place.');
    onGoogleUpdate?.(result.place);
-   setRefreshMessage(`Updated from Google${result.matchedName?` · matched ${result.matchedName}`:''}`);
+   setRefreshMessage(result.matchWarning??`Updated from Google${result.matchedName?` · matched ${result.matchedName}`:''}`);
   }catch(error){
    if(error instanceof Error&&error.message.includes('password'))sessionStorage.removeItem('places-refresh-secret');
    setRefreshMessage(error instanceof Error?error.message:'Unable to refresh this place.');

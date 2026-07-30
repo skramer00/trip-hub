@@ -46,6 +46,18 @@ function queryFor(place:Place){
  return `${place.name}, ${area}`;
 }
 
+function normalizedWords(value:string){
+ return new Set(value.toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(word=>word.length>2));
+}
+
+function questionableMatch(savedName:string,matchedName:string){
+ const saved=normalizedWords(savedName);
+ const matched=normalizedWords(matchedName);
+ if(!saved.size||!matched.size)return false;
+ const overlap=[...saved].filter(word=>matched.has(word)).length;
+ return overlap/Math.min(saved.size,matched.size)<0.5;
+}
+
 export async function fetchGooglePlace(place:Place){
  const apiKey=process.env.GOOGLE_PLACES_API_KEY;
  if(!apiKey)throw new Error('GOOGLE_PLACES_API_KEY is not configured.');
@@ -66,8 +78,10 @@ export async function fetchGooglePlace(place:Place){
  const result=await response.json() as {places?:GooglePlace[]};
  const match=result.places?.[0];
  if(!match)throw new Error(`Google could not find a match for “${place.name}”.`);
+ const matchedName=match.displayName?.text??place.name;
  return {
-  matchedName:match.displayName?.text??place.name,
+  matchedName,
+  matchWarning:questionableMatch(place.name,matchedName)?`Check this match: Google returned “${matchedName}”.`:undefined,
   googlePlaceId:match.id,
   formattedAddress:match.formattedAddress,
   mapUrl:match.googleMapsUri,
