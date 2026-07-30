@@ -18,6 +18,7 @@ type EditableValue=string|boolean|number|undefined;
 const localStateKey='trip-state';
 const pendingSyncKey='trip-state-pending-sync';
 const offlineReadyKey='trip-offline-ready-v2';
+const boardHiddenDaysKey='trip-board-hidden-days-v1';
 
 function readLocalState(){
  try{
@@ -387,6 +388,22 @@ type DragPosition={dayIndex:number;itemIndex:number};
 function TripBoard({days,canUndo,onUndo,onMove,onDuplicate,onAdd,onToggle,onOpenItem}:{days:TripState['days'];canUndo:boolean;onUndo:()=>void;onMove:(fromDay:number,fromIndex:number,toDay:number,toIndex:number)=>void;onDuplicate:(dayIndex:number,itemIndex:number)=>void;onAdd:(dayIndex:number)=>void;onToggle:(dayIndex:number,itemIndex:number)=>void;onOpenItem:(itemId:string)=>void}){
  const [dragging,setDragging]=useState<DragPosition|null>(null);
  const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
+ const [hiddenDays,setHiddenDays]=useState<Set<string>>(()=>new Set());
+ useEffect(()=>{
+  try{
+   const saved=JSON.parse(localStorage.getItem(boardHiddenDaysKey)??'[]') as string[];
+   setHiddenDays(new Set(saved.filter(date=>days.some(day=>day.date===date))));
+  }catch{}
+ },[days]);
+ function saveHiddenDays(next:Set<string>){
+  setHiddenDays(next);
+  try{localStorage.setItem(boardHiddenDaysKey,JSON.stringify([...next]));}catch{}
+ }
+ function toggleDayVisibility(date:string){
+  const next=new Set(hiddenDays);
+  if(next.has(date))next.delete(date);else next.add(date);
+  saveHiddenDays(next);
+ }
  function dropAt(event:React.DragEvent,toDay:number,toIndex:number){
   event.preventDefault();
   if(dragging)onMove(dragging.dayIndex,dragging.itemIndex,toDay,toIndex);
@@ -400,9 +417,16 @@ function TripBoard({days,canUndo,onUndo,onMove,onDuplicate,onAdd,onToggle,onOpen
   });
  }
  return <section className="boardBreakout">
-  <div className="pageIntro boardIntro"><div><div className="eyebrow">TRIP BOARD</div><h2>Build the whole trip at a glance</h2><p className="muted">Drag cards within a day or across days. Use the card controls when you’re on a phone.</p></div><div className="placeActions"><button className="btn" onClick={onUndo} disabled={!canUndo}>↶ Undo</button><span className="chip">{days.length} days</span></div></div>
+  <div className="pageIntro boardIntro"><div><div className="eyebrow">TRIP BOARD</div><h2>Build the whole trip at a glance</h2><p className="muted">Drag cards within a day or across days. Hide quieter days while you focus on the parts that need planning.</p></div><div className="placeActions"><button className="btn" onClick={onUndo} disabled={!canUndo}>↶ Undo</button><span className="chip">{days.length-hiddenDays.size} of {days.length} days shown</span></div></div>
+  <div className="boardDayFilters card">
+   <div className="between"><div><strong>Days shown</strong><p className="muted small">This view preference stays on this device and does not change the itinerary.</p></div><div className="placeActions"><button className="textButton" onClick={()=>saveHiddenDays(new Set())}>Show all</button><button className="textButton" onClick={()=>saveHiddenDays(new Set(days.map(day=>day.date)))}>Hide all</button></div></div>
+   <div className="boardDayChoices">
+    {days.map(day=><label className={`boardDayChoice ${hiddenDays.has(day.date)?'hidden':''}`} key={day.date}><input type="checkbox" checked={!hiddenDays.has(day.date)} onChange={()=>toggleDayVisibility(day.date)}/><span><strong>{day.label}</strong><small>{day.city}</small></span></label>)}
+   </div>
+  </div>
+  {hiddenDays.size===days.length&&<div className="empty card boardEmpty"><strong>All days are hidden.</strong><span>Select a day above or choose Show all to bring the board back.</span></div>}
   <div className="tripBoard" aria-label="Trip itinerary board">
-   {days.map((day,di)=>{
+   {days.map((day,di)=>({day,di})).filter(({day})=>!hiddenDays.has(day.date)).map(({day,di})=>{
     const isCollapsed=collapsed.has(day.date);
     return <article className={`boardColumn ${isCollapsed?'collapsed':''}`} key={day.date} onDragOver={event=>event.preventDefault()} onDrop={event=>dropAt(event,di,day.items.length)}>
      <header className="boardColumnHeader"><button className="boardCollapse" onClick={()=>toggleCollapsed(day.date)} aria-expanded={!isCollapsed} aria-label={`${isCollapsed?'Expand':'Collapse'} ${day.label}`}>{isCollapsed?'▸':'▾'}</button><div><div className="eyebrow">{day.date}</div><h3>{day.label}</h3><p>{day.city}</p></div><span className="chip neutral">{day.items.length}</span></header>
