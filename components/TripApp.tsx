@@ -511,7 +511,7 @@ function AssistantView({assistant,tripState,now,onComplete,onVisited,onShowPlace
  const [extraMinutes,setExtraMinutes]=useState<number|null>(null);
  const actionItem=assistant.currentActivity??assistant.nextReservation??assistant.nextItem;
  const fixedItem=assistant.nextReservation;
- const extraSuggestions=useMemo(()=>assistant.currentDay&&extraMinutes?findSuggestionCandidates(tripState,assistant.currentDay,extraMinutes,6,{anchor:assistant.currentActivity,now}):[],[assistant.currentActivity,assistant.currentDay,extraMinutes,now,tripState]);
+ const extraSuggestions=useMemo(()=>assistant.currentDay&&extraMinutes?findSuggestionCandidates(tripState,assistant.currentDay,extraMinutes,6,{anchor:assistant.suggestionAnchor,now}):[],[assistant.currentDay,assistant.suggestionAnchor,extraMinutes,now,tripState]);
  const displayedSuggestions:SuggestedPlace[]=extraMinutes?extraSuggestions:assistant.suggestions;
  return <section className="assistantPage">
   <div className={`card assistantHero assistant-${assistant.status}`}>
@@ -553,7 +553,7 @@ function AssistantView({assistant,tripState,now,onComplete,onVisited,onShowPlace
    <div className="grid assistantGrid">{displayedSuggestions.map(suggestion=><article className="card suggestionCard" key={suggestion.place.id}>
     <div className="between"><span className={`priority priority-${suggestion.place.priority}`}>{suggestion.place.priority==='must'?'Must do':suggestion.place.priority}</span><span className="duration">{suggestion.estimatedDuration} min</span></div>
     <h3>{suggestion.place.name}</h3>
-    <div className="muted small">{suggestion.place.category} · {suggestion.place.region}</div>
+    <div className="muted small">{suggestion.place.category} · {suggestion.place.region}{suggestion.distanceKm!==undefined?` · ${suggestion.distanceKm<1?`${Math.max(50,Math.round(suggestion.distanceKm*1000/50)*50)} m`:`${suggestion.distanceKm.toFixed(1)} km`} away`:''}</div>
     {suggestion.place.notes&&<p>{suggestion.place.notes}</p>}
     <div className="whyBox"><strong>Why this fits</strong><ul>{suggestion.reasons.slice(0,3).map(reason=><li key={reason}>{reason}</li>)}</ul></div>
     <div className="placeActions"><a className="btn primary" href={suggestion.place.mapUrl} target="_blank" rel="noreferrer">Directions</a><button className="btn" onClick={()=>onShowPlaces(suggestion.place)}>View details</button><button className="textButton" onClick={()=>onVisited(suggestion.place.id)}>Mark visited</button></div>
@@ -634,7 +634,7 @@ function HoursManager({places,days,onUpdated,onIgnoreHours,onOpenPlace}:{places:
   });
  }
  function selectVisible(){
-  setSelected(new Set(visible.filter(place=>!place.ignoreHours).slice(0,10).map(place=>place.id)));
+  setSelected(new Set(visible.slice(0,10).map(place=>place.id)));
  }
  function toggleIgnored(place:Place){
   if(!place.ignoreHours)setSelected(current=>{const next=new Set(current);next.delete(place.id);return next;});
@@ -663,7 +663,7 @@ function HoursManager({places,days,onUpdated,onIgnoreHours,onOpenPlace}:{places:
  }
 
  return <section className="hoursManager">
-  <div className="pageIntro"><div><div className="eyebrow">OPENING HOURS</div><h2>Keep recommendations current</h2><p className="muted">Refresh only the places you care about. Batches are capped at 10 Google requests.</p></div><span className="chip">{places.length} places</span></div>
+  <div className="pageIntro"><div><div className="eyebrow">OPENING HOURS</div><h2>Keep recommendations current</h2><p className="muted">Refresh only the places you care about. Batches are capped at 10 Google requests.</p></div><div className="placeActions"><span className="chip">{places.filter(place=>Number.isFinite(place.latitude)&&Number.isFinite(place.longitude)).length}/{places.length} locations</span><span className="chip">{places.length} places</span></div></div>
   <div className="hoursStats">
    <button className={statusFilter==='missing'?'active':''} onClick={()=>setStatusFilter(statusFilter==='missing'?'all':'missing')}><span>Missing</span><strong>{counts.missing}</strong></button>
    <button className={statusFilter==='stale'?'active':''} onClick={()=>setStatusFilter(statusFilter==='stale'?'all':'stale')}><span>Stale (30+ days)</span><strong>{counts.stale}</strong></button>
@@ -684,11 +684,11 @@ function HoursManager({places,days,onUpdated,onIgnoreHours,onOpenPlace}:{places:
   {results.length>0&&<div className="card refreshResults"><div className="between"><strong>Last refresh</strong><button className="textButton" onClick={()=>setResults([])}>Dismiss</button></div>{results.map(result=><div className={`refreshResult ${result.ok?'success':'failure'}`} key={result.placeId}><span>{result.ok?'✓':'!'}</span><div><strong>{result.name}</strong><p>{result.ok?(result.matchWarning??`Matched ${result.matchedName??result.name}`):result.error}</p></div></div>)}</div>}
   <div className="hoursTable" role="table" aria-label="Saved place hours">
    {visible.map(place=>{const status=hoursFilterStatus(place);const checked=selected.has(place.id);return <article className="hoursPlaceRow" role="row" key={place.id}>
-    <input type="checkbox" aria-label={`Select ${place.name}`} checked={checked} disabled={place.ignoreHours||(!checked&&selected.size>=10)} onChange={()=>toggleSelected(place.id)}/>
-    <div className="hoursPlaceName"><strong>{place.name}</strong><span>{place.region} · {place.category}</span>{place.formattedAddress&&<small>{place.formattedAddress}</small>}</div>
+    <input type="checkbox" aria-label={`Select ${place.name}`} checked={checked} disabled={!checked&&selected.size>=10} onChange={()=>toggleSelected(place.id)}/>
+    <div className="hoursPlaceName"><strong>{place.name}</strong><span>{place.region} · {place.category} · {Number.isFinite(place.latitude)&&Number.isFinite(place.longitude)?'Location saved':'Location needed'}</span>{place.formattedAddress&&<small>{place.formattedAddress}</small>}</div>
     <span className={`hoursStatus manager-${status}`}>{hoursStatusCopy(place)}</span>
     <span className={`priority priority-${place.priority}`}>{place.priority==='must'?'Must do':place.priority}</span>
-    <div className="placeActions"><button className="btn" onClick={()=>toggleIgnored(place)}>{place.ignoreHours?'Use hours':'Ignore hours'}</button><button className="btn" onClick={()=>refresh([place.id])} disabled={refreshing||place.ignoreHours}>Refresh</button><button className="textButton" onClick={()=>onOpenPlace(place)}>Details</button></div>
+    <div className="placeActions"><button className="btn" onClick={()=>toggleIgnored(place)}>{place.ignoreHours?'Use hours':'Ignore hours'}</button><button className="btn" onClick={()=>refresh([place.id])} disabled={refreshing}>Refresh</button><button className="textButton" onClick={()=>onOpenPlace(place)}>Details</button></div>
    </article>;})}
   </div>
   {!visible.length&&<div className="empty card">No places match these hours filters.</div>}
@@ -757,7 +757,7 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDu
    </div>
    {tripDates&&<fieldset className="recommendedDates"><legend>Recommended trip days</legend><div>{tripDates.map(day=><label className="toggleLine" key={day.date}><input type="checkbox" checked={place.recommendedDates?.includes(day.date)??false} onChange={event=>{const dates=new Set(place.recommendedDates??[]);if(event.target.checked)dates.add(day.date);else dates.delete(day.date);edit({recommendedDates:[...dates]},true);}}/> {day.label}</label>)}</div></fieldset>}
    <div className={`hoursEditor ${place.ignoreHours?'hoursEditorIgnored':''}`}>
-    <div className="between"><div><strong>Weekly hours</strong><p className="muted small">{place.ignoreHours?'Hours checks are disabled for this place.':'Used to prevent closed-place suggestions.'}</p></div><div className="placeActions"><button className="btn primary" onClick={refreshFromGoogle} disabled={refreshing||place.ignoreHours}>{refreshing?'Refreshing…':'Refresh from Google'}</button><button className="btn" disabled={place.ignoreHours} onClick={()=>edit({hoursVerifiedAt:new Date().toISOString(),hoursSource:'manual'},true)}>Mark verified today</button></div></div>
+    <div className="between"><div><strong>Weekly hours</strong><p className="muted small">{place.ignoreHours?'Hours checks are disabled. Google refresh can still update its address and location.':'Used to prevent closed-place suggestions.'}</p></div><div className="placeActions"><button className="btn primary" onClick={refreshFromGoogle} disabled={refreshing}>{refreshing?'Refreshing…':'Refresh Google data'}</button><button className="btn" disabled={place.ignoreHours} onClick={()=>edit({hoursVerifiedAt:new Date().toISOString(),hoursSource:'manual'},true)}>Mark verified today</button></div></div>
     {refreshMessage&&<p className="muted small" role="status">{refreshMessage}</p>}
     {placeWeekdays.map(([day,label])=>{const hours=place.weeklyHours?.[day]??{open:'09:00',close:'17:00',closed:false};return <div className="hoursRow" key={day}><strong>{label}</strong><input className="field" type="time" value={hours.open} disabled={hours.closed||place.ignoreHours} onChange={event=>onEditHours(day,{open:event.target.value})} onBlur={save}/><span>to</span><input className="field" type="time" value={hours.close} disabled={hours.closed||place.ignoreHours} onChange={event=>onEditHours(day,{close:event.target.value})} onBlur={save}/><label className="toggleLine"><input type="checkbox" checked={Boolean(hours.closed)} disabled={place.ignoreHours} onChange={event=>{onEditHours(day,{closed:event.target.checked});window.setTimeout(save,0);}}/> Closed</label></div>;})}
    </div>

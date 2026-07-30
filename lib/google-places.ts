@@ -8,6 +8,7 @@ type GooglePlace={
  id?:string;
  displayName?:{text?:string};
  formattedAddress?:string;
+ location?:{latitude?:number;longitude?:number};
  googleMapsUri?:string;
  websiteUri?:string;
  regularOpeningHours?:{periods?:GooglePeriod[];weekdayDescriptions?:string[]};
@@ -79,7 +80,7 @@ export async function fetchGooglePlace(place:Place){
   headers:{
    'content-type':'application/json',
    'X-Goog-Api-Key':apiKey,
-   'X-Goog-FieldMask':'places.id,places.displayName,places.formattedAddress,places.googleMapsUri,places.websiteUri,places.regularOpeningHours',
+   'X-Goog-FieldMask':'places.id,places.displayName,places.formattedAddress,places.location,places.googleMapsUri,places.websiteUri,places.regularOpeningHours',
   },
   body:JSON.stringify({textQuery:queryFor(place),pageSize:1,languageCode:'en'}),
   cache:'no-store',
@@ -97,6 +98,8 @@ export async function fetchGooglePlace(place:Place){
   matchWarning:questionableMatch(place.name,matchedName)?`Check this match: Google returned “${matchedName}”.`:undefined,
   googlePlaceId:match.id,
   formattedAddress:match.formattedAddress,
+  latitude:match.location?.latitude,
+  longitude:match.location?.longitude,
   mapUrl:match.googleMapsUri,
   websiteUrl:match.websiteUri,
   weeklyHours:rangesFromPeriods(match.regularOpeningHours?.periods),

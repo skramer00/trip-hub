@@ -18,6 +18,7 @@ type SmartPlace=Place&{
 
 type SuggestionContext={
  anchor?:ItineraryItem;
+ anchorPlace?:Place;
  now?:Date;
 };
 
@@ -32,6 +33,8 @@ export interface SuggestedPlace{
  reason:string;
  reasons:string[];
  estimatedDuration:number;
+ distanceKm?:number;
+ walkingMinutes?:number;
 }
 
 export interface AssistantState{
@@ -49,6 +52,7 @@ export interface AssistantState{
  suggestions:SuggestedPlace[];
  notices:AssistantNotice[];
  allRemainingFlexible:boolean;
+ suggestionAnchor?:ItineraryItem;
 }
 
 const DEFAULT_PREP_BUFFER=15;
@@ -102,6 +106,52 @@ function meaningfulTokens(value:string){
 
 function placeText(place:Place){
  return `${place.name} ${place.category} ${place.notes} ${place.tags.join(' ')}`.toLowerCase();
+}
+
+function normalizedPlaceName(value:string){
+ return value.toLowerCase().replace(/[^a-z0-9]/g,'');
+}
+
+function placeHasCoordinates(place?:Place):place is Place&{latitude:number;longitude:number}{
+ return Boolean(place&&Number.isFinite(place.latitude)&&Number.isFinite(place.longitude));
+}
+
+function placeForItem(state:TripState,item?:ItineraryItem){
+ if(!item)return undefined;
+ if(item.placeId){
+  const linked=state.places.find(place=>place.id===item.placeId);
+  if(linked)return linked;
+ }
+ const destination=normalizedPlaceName(item.destination??'');
+ const title=normalizedPlaceName(item.title);
+ return state.places.find(place=>{
+  const name=normalizedPlaceName(place.name);
+  return Boolean(name&&((destination&&destination===name)||title===name));
+ })??state.places.find(place=>{
+  const name=normalizedPlaceName(place.name);
+  return name.length>=6&&Boolean((destination&&destination.includes(name))||title.includes(name));
+ });
+}
+
+export function distanceBetweenPlaces(from:Place,to:Place){
+ if(!placeHasCoordinates(from)||!placeHasCoordinates(to))return undefined;
+ const radians=(degrees:number)=>degrees*Math.PI/180;
+ const earthRadiusKm=6371;
+ const latitudeDelta=radians(to.latitude-from.latitude);
+ const longitudeDelta=radians(to.longitude-from.longitude);
+ const startLatitude=radians(from.latitude);
+ const endLatitude=radians(to.latitude);
+ const a=Math.sin(latitudeDelta/2)**2+Math.cos(startLatitude)*Math.cos(endLatitude)*Math.sin(longitudeDelta/2)**2;
+ return earthRadiusKm*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+function approximateWalkingMinutes(distanceKm:number){
+ return Math.max(1,Math.round(distanceKm*16));
+}
+
+function distanceLabel(distanceKm:number){
+ if(distanceKm<1)return `${Math.max(50,Math.round(distanceKm*1000/50)*50)} m away`;
+ return `${distanceKm.toFixed(distanceKm<10?1:0)} km away`;
 }
 
 function suggestionFamily(place:Place){
@@ -258,6 +308,16 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
  else {score+=5;reasons.push('A useful backup option');}
  if(place.recommendedDates?.includes(day.date)){score+=30;reasons.push('Recommended for this day');}
  if(placeMatchesDay(place,day)){score+=15;reasons.push(`Fits your ${day.city} plans`);}
+ const distanceKm=context.anchorPlace?distanceBetweenPlaces(context.anchorPlace,place):undefined;
+ const walkingMinutes=distanceKm!==undefined?approximateWalkingMinutes(distanceKm):undefined;
+ if(distanceKm!==undefined){
+  if(distanceKm<=0.5)score+=32;
+  else if(distanceKm<=1)score+=25;
+  else if(distanceKm<=2)score+=15;
+  else if(distanceKm<=4)score+=5;
+  else if(distanceKm>8)score-=30;
+  reasons.push(`${distanceLabel(distanceKm)} from ${context.anchorPlace?.name}${walkingMinutes!==undefined?` · about ${walkingMinutes} min walking`:''}`);
+ }
  if(context.anchor){
   const anchorTokens=meaningfulTokens(`${context.anchor.title} ${context.anchor.destination??''} ${context.anchor.details??''}`);
   const candidateText=placeText(place);
@@ -270,18 +330,20 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
  if(availableMinutes>=duration+15){score+=30;reasons.push('Fits comfortably before your next scheduled event');}
  else if(availableMinutes>=duration){score+=15;reasons.push('Fits within the available time');}
  else {score-=40;reasons.push('May be tight for the available time');}
- return {score,reasons,duration};
+ return {score,reasons,duration,distanceKm,walkingMinutes};
 }
 
 export function findSuggestionCandidates(state:TripState,day:TripDay,availableMinutes:number,limit=3,context:SuggestionContext={}):SuggestedPlace[]{
+ const anchorPlace=context.anchorPlace??placeForItem(state,context.anchor);
+ const scoredContext={...context,anchorPlace};
  const ranked=state.places
-  .filter(place=>!place.visited&&placeMatchesDay(place,day))
+  .filter(place=>!place.visited&&place.id!==anchorPlace?.id&&placeMatchesDay(place,day))
   .map(place=>{
-   const result=scoreSuggestion(place,day,availableMinutes,context);
-   return {place,score:result.score,reasons:result.reasons,reason:result.reasons.join(' • '),estimatedDuration:result.duration};
+   const result=scoreSuggestion(place,day,availableMinutes,scoredContext);
+   return {place,score:result.score,reasons:result.reasons,reason:result.reasons.join(' • '),estimatedDuration:result.duration,distanceKm:result.distanceKm,walkingMinutes:result.walkingMinutes};
   })
   .filter(item=>item.score>0&&item.estimatedDuration<=Math.max(availableMinutes,30))
-  .sort((a,b)=>b.score-a.score||a.estimatedDuration-b.estimatedDuration||a.place.name.localeCompare(b.place.name));
+  .sort((a,b)=>b.score-a.score||(a.distanceKm??Number.POSITIVE_INFINITY)-(b.distanceKm??Number.POSITIVE_INFINITY)||a.estimatedDuration-b.estimatedDuration||a.place.name.localeCompare(b.place.name));
 
  const selected:SuggestedPlace[]=[];
  const usedFamilies=new Set<string>();
@@ -355,7 +417,8 @@ export function buildAssistantState(state:TripState,now=new Date()):AssistantSta
  const remaining=day.items.filter(item=>!item.done);
  const allRemainingFlexible=remaining.length>0&&remaining.every(item=>!isFixedItem(item));
  const presentation=buildPresentation({now,day,current,next,reservation,leaveBy,availableMinutes,allRemainingFlexible});
- const suggestions=(presentation.status==='explore'||presentation.status==='relax')&&availableMinutes>=30?findSuggestionCandidates(state,day,availableMinutes,3,{anchor:current?.item??previous?.item,now}):[];
+ const suggestionAnchor=current?.item??previous?.item??next?.item;
+ const suggestions=(presentation.status==='explore'||presentation.status==='relax')&&availableMinutes>=30?findSuggestionCandidates(state,day,availableMinutes,3,{anchor:suggestionAnchor,now}):[];
  return {
   currentDay:day,
   currentDayIndex:found.index,
@@ -370,6 +433,7 @@ export function buildAssistantState(state:TripState,now=new Date()):AssistantSta
   subheadline:presentation.subheadline,
   suggestions,
   notices:presentation.notices,
-  allRemainingFlexible
+  allRemainingFlexible,
+  suggestionAnchor
  };
 }

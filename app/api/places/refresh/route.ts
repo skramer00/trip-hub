@@ -30,6 +30,8 @@ export async function POST(request:Request){
     const google=await fetchGooglePlace(place);
     if(google.googlePlaceId)place.googlePlaceId=google.googlePlaceId;
     if(google.formattedAddress)place.formattedAddress=google.formattedAddress;
+    if(google.latitude!==undefined)place.latitude=google.latitude;
+    if(google.longitude!==undefined)place.longitude=google.longitude;
     if(google.mapUrl)place.mapUrl=google.mapUrl;
     if(google.websiteUrl&&!place.websiteUrl)place.websiteUrl=google.websiteUrl;
     place.weeklyHours=google.weeklyHours;

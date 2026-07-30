@@ -5,5 +5,5 @@ export type CheckItem={id:string,title:string,category:string,done:boolean,notes
 export type Weekday='sunday'|'monday'|'tuesday'|'wednesday'|'thursday'|'friday'|'saturday';
 export type PlaceHoursInterval={open:string;close:string};
 export type PlaceHoursRange={open:string;close:string;closed?:boolean;intervals?:PlaceHoursInterval[]};
-export type Place={id:string,name:string,region:string,category:string,notes:string,mapUrl:string,menuUrl:string,websiteUrl:string,tags:string[],priority:'must'|'possible'|'backup',visited:boolean,recommendedDates?:string[],estimatedDuration?:number,weeklyHours?:Partial<Record<Weekday,PlaceHoursRange>>,hoursTimeZone?:string,hoursVerifiedAt?:string,googlePlaceId?:string,formattedAddress?:string,hoursSource?:'google'|'manual',ignoreHours?:boolean};
+export type Place={id:string,name:string,region:string,category:string,notes:string,mapUrl:string,menuUrl:string,websiteUrl:string,tags:string[],priority:'must'|'possible'|'backup',visited:boolean,recommendedDates?:string[],estimatedDuration?:number,weeklyHours?:Partial<Record<Weekday,PlaceHoursRange>>,hoursTimeZone?:string,hoursVerifiedAt?:string,googlePlaceId?:string,formattedAddress?:string,hoursSource?:'google'|'manual',ignoreHours?:boolean,latitude?:number,longitude?:number};
 export type TripState={days:TripDay[],foods:CheckItem[],packing:CheckItem[],places:Place[]};
