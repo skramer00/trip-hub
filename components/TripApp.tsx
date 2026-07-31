@@ -4,7 +4,7 @@ import {useEffect,useMemo,useState} from 'react';
 import {buildAssistantState,estimatedItemDuration,findNearbyPlaces,findSuggestionCandidates,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
 import {checkItineraryHours} from '@/lib/place-hours';
 import {areaOptions,suggestedAreaNames,suggestPlaceArea} from '@/lib/place-areas';
-import {analyzeDayRoute,boardPlace,placeArea,suggestDayOrder} from '@/lib/board-planner';
+import {analyzeDayRoute,boardPlace,buildGoogleMapsDayRoute,dayRouteStops,placeArea,routeOrderChanged,suggestDayOrder} from '@/lib/board-planner';
 import {deleteReservationAttachment,listReservationAttachments,saveReservationAttachment} from '@/lib/attachments';
 import type {ReservationAttachment} from '@/lib/attachments';
 import type {ItineraryHoursCheck} from '@/lib/place-hours';
@@ -471,6 +471,7 @@ function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPla
  const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
  const [hiddenDays,setHiddenDays]=useState<Set<string>>(()=>new Set());
  const [drawerOpen,setDrawerOpen]=useState(true);
+ const [routeDayIndex,setRouteDayIndex]=useState<number|null>(null);
  const [targetDayIndex,setTargetDayIndex]=useState(0);
  const [placeQuery,setPlaceQuery]=useState('');
  const [placeAreaFilter,setPlaceAreaFilter]=useState('All');
@@ -555,12 +556,13 @@ function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPla
     </div>
    </aside>}
    <div className="boardPlannerMain">
-    <div className="boardDayFilters card">
+   <div className="boardDayFilters card">
      <div className="between"><div><strong>Days shown</strong><p className="muted small">This view preference stays on this device and does not change the itinerary.</p></div><div className="placeActions"><button className="textButton" onClick={()=>saveHiddenDays(new Set())}>Show all</button><button className="textButton" onClick={()=>saveHiddenDays(new Set(days.map(day=>day.date)))}>Hide all</button></div></div>
      <div className="boardDayChoices">
       {days.map(day=><label className={`boardDayChoice ${hiddenDays.has(day.date)?'hidden':''}`} key={day.date}><input type="checkbox" checked={!hiddenDays.has(day.date)} onChange={()=>toggleDayVisibility(day.date)}/><span><strong>{day.label}</strong><small>{day.city}</small></span></label>)}
      </div>
     </div>
+    {routeDayIndex!==null&&days[routeDayIndex]&&<DayRoutePanel day={days[routeDayIndex]} places={places} onApply={()=>onOptimize(routeDayIndex)} onClose={()=>setRouteDayIndex(null)}/>}
     {hiddenDays.size===days.length&&<div className="empty card boardEmpty"><strong>All days are hidden.</strong><span>Select a day above or choose Show all to bring the board back.</span></div>}
     <div className="tripBoard" aria-label="Trip itinerary board">
      {days.map((day,di)=>({day,di})).filter(({day})=>!hiddenDays.has(day.date)).map(({day,di})=>{
@@ -569,7 +571,7 @@ function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPla
       return <article className={`boardColumn ${isCollapsed?'collapsed':''} ${draggingPlaceId?'acceptingPlace':''}`} key={day.date} onDragOver={event=>event.preventDefault()} onDrop={event=>dropAt(event,di,day.items.length)}>
        <header className="boardColumnHeader"><button className="boardCollapse" onClick={()=>toggleCollapsed(day.date)} aria-expanded={!isCollapsed} aria-label={`${isCollapsed?'Expand':'Collapse'} ${day.label}`}>{isCollapsed?'▸':'▾'}</button><div><div className="eyebrow">{day.date}</div><h3>{day.label}</h3><p>{day.city}</p></div><span className="chip neutral">{day.items.length}</span></header>
        {!isCollapsed&&<>
-        <div className="boardRouteSummary"><div><strong>{route.linkedStops} routed stops</strong><span>{route.totalTravelMinutes?`≈ ${route.totalTravelMinutes} min transit · ${route.totalDistanceKm.toFixed(1)} km`:'Add linked places for travel estimates'}</span></div><button className="textButton" onClick={()=>onOptimize(di)} disabled={!route.canOptimize}>Suggest order</button></div>
+        <div className="boardRouteSummary"><div><strong>{route.linkedStops} routed stops</strong><span>{route.totalTravelMinutes?`≈ ${route.totalTravelMinutes} min transit · ${route.totalDistanceKm.toFixed(1)} km`:'Add linked places for travel estimates'}</span></div><div className="boardRouteActions"><button className="textButton" onClick={()=>setRouteDayIndex(di)}>View route</button><button className="textButton" onClick={()=>onOptimize(di)} disabled={!route.canOptimize}>Suggest order</button></div></div>
         {route.warnings.length>0&&<div className="boardRouteWarnings">{route.warnings.slice(0,2).map(warning=><span key={warning}>⚠ {warning}</span>)}</div>}
         <div className="boardCards">
          {day.items.map((item,ii)=>{const boardType=inferItemType(item);const linkedPlace=boardPlace(item,places);const linkedArea=placeArea(linkedPlace);const segment=route.segments.get(item.id);return <div className="boardCardStack" key={item.id}>
@@ -589,6 +591,33 @@ function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPla
      })}
     </div>
    </div>
+  </div>
+ </section>;
+}
+
+function DayRoutePanel({day,places,onApply,onClose}:{day:TripState['days'][number];places:Place[];onApply:()=>void;onClose:()=>void}){
+ const currentStops=dayRouteStops(day,places);
+ const suggestedDay={...day,items:suggestDayOrder(day,places)};
+ const suggestedStops=dayRouteStops(suggestedDay,places);
+ const currentRoute=analyzeDayRoute(day,places);
+ const suggestedRoute=analyzeDayRoute(suggestedDay,places);
+ const changed=routeOrderChanged(day,places);
+ const missing=currentStops.filter(stop=>stop.locationQuality==='missing');
+ const textOnly=currentStops.filter(stop=>stop.locationQuality==='text');
+ function routeButtons(routeDay:TripState['days'][number]){
+  const transit=buildGoogleMapsDayRoute(routeDay,places,'transit');
+  const walking=buildGoogleMapsDayRoute(routeDay,places,'walking');
+  return <div className="placeActions routeMapActions">{transit&&<a className="btn primary" href={transit} target="_blank" rel="noreferrer">Open transit route</a>}{walking&&<a className="btn" href={walking} target="_blank" rel="noreferrer">Open walking route</a>}</div>;
+ }
+ function stopList(stops:ReturnType<typeof dayRouteStops>){
+  return <ol className="dayRouteStops">{stops.map((stop,index)=><li className={`dayRouteStop location-${stop.locationQuality}`} key={stop.item.id}><span className="routeStopNumber">{index+1}</span><div><div className="between"><strong>{stop.item.title}</strong><span className="boardTime">{stop.item.time}</span></div><p>{stop.place?.formattedAddress||stop.item.destination||stop.place?.name||'Add a destination to include this stop in Maps.'}</p><div className="boardBadges"><span className={`chip ${isFixedItem(stop.item)?'':'neutral'}`}>{isFixedItem(stop.item)?'Fixed':'Flexible'}</span>{stop.area&&<span className="chip boardArea">{stop.area.split(' — ').at(-1)}</span>}<span className={`chip routeQuality quality-${stop.locationQuality}`}>{stop.locationQuality==='linked'?'Saved place':stop.locationQuality==='text'?'Text location':'Location missing'}</span></div></div></li>)}</ol>;
+ }
+ return <section className="card dayRoutePanel">
+  <div className="between dayRouteHeader"><div><div className="eyebrow">DAY ROUTE</div><h3>{day.label} · {day.city}</h3><p className="muted small">Review the current order, compare the suggested route, then choose whether to apply it.</p></div><button className="btn" onClick={onClose}>Close</button></div>
+  {(missing.length>0||textOnly.length>0)&&<div className="dayRouteNotice">{missing.length>0&&<span>⚠ {missing.length} stop{missing.length===1?'':'s'} need a destination.</span>}{textOnly.length>0&&<span>ℹ {textOnly.length} stop{textOnly.length===1?' uses':'s use'} text-only locations instead of saved places.</span>}</div>}
+  <div className="dayRouteCompare">
+   <article className="dayRouteOption"><div className="between"><div><div className="eyebrow">CURRENT ORDER</div><strong>{currentRoute.totalTravelMinutes?`≈ ${currentRoute.totalTravelMinutes} min travel`:'Travel estimate unavailable'}</strong></div><span className="chip neutral">{currentRoute.linkedStops} linked</span></div>{stopList(currentStops)}{routeButtons(day)}</article>
+   <article className={`dayRouteOption suggested ${changed?'changed':'same'}`}><div className="between"><div><div className="eyebrow">SUGGESTED ORDER</div><strong>{suggestedRoute.totalTravelMinutes?`≈ ${suggestedRoute.totalTravelMinutes} min travel`:'Travel estimate unavailable'}</strong></div><span className="chip">{changed?'Alternative':'Already efficient'}</span></div>{stopList(suggestedStops)}{routeButtons(suggestedDay)}<button className="btn primary routeApply" onClick={onApply} disabled={!changed}>Apply suggested order</button><p className="muted routeFinePrint">Fixed plans stay anchored. Only flexible stops are rearranged.</p></article>
   </div>
  </section>;
 }

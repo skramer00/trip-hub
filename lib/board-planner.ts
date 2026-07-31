@@ -22,12 +22,54 @@ export type DayRouteAnalysis={
  canOptimize:boolean;
 };
 
+export type BoardRouteStop={
+ item:ItineraryItem;
+ place?:Place;
+ query?:string;
+ area?:string;
+ locationQuality:'linked'|'text'|'missing';
+};
+
 export function boardPlace(item:ItineraryItem,places:Place[]){
  return findItineraryPlace(item,places);
 }
 
 export function placeArea(place?:Place){
  return place?.area??(place?suggestPlaceArea(place):undefined);
+}
+
+function placeQuery(place:Place){
+ if(place.latitude!==undefined&&place.longitude!==undefined)return `${place.latitude},${place.longitude}`;
+ return place.formattedAddress||place.name;
+}
+
+export function dayRouteStops(day:TripDay,places:Place[]):BoardRouteStop[]{
+ return day.items.map(item=>{
+  const place=boardPlace(item,places);
+  if(place)return {item,place,query:placeQuery(place),area:placeArea(place),locationQuality:'linked' as const};
+  const query=item.destination?.trim();
+  return {item,query:query||undefined,locationQuality:query?'text' as const:'missing' as const};
+ });
+}
+
+export function buildGoogleMapsDayRoute(day:TripDay,places:Place[],travelMode:'walking'|'transit'='transit'){
+ const stops=dayRouteStops(day,places).filter(stop=>stop.query);
+ if(stops.length<2)return undefined;
+ if(travelMode==='walking'){
+  if(stops.some(stop=>!stop.place))return undefined;
+  for(let index=1;index<stops.length;index++){
+   const distance=distanceBetweenPlaces(stops[index-1].place!,stops[index].place!);
+   if(distance===undefined||distance>8)return undefined;
+  }
+ }
+ const params=new URLSearchParams({api:'1',origin:stops[0].query!,destination:stops.at(-1)!.query!,travelmode:travelMode});
+ if(stops.length>2)params.set('waypoints',stops.slice(1,-1).map(stop=>stop.query).join('|'));
+ return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+
+export function routeOrderChanged(day:TripDay,places:Place[]){
+ const suggested=suggestDayOrder(day,places);
+ return suggested.some((item,index)=>item.id!==day.items[index]?.id);
 }
 
 function transitMinutes(distanceKm:number){
