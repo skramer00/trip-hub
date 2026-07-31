@@ -6,6 +6,8 @@ import {checkItineraryHours} from '@/lib/place-hours';
 import {areaOptions,suggestedAreaNames,suggestPlaceArea} from '@/lib/place-areas';
 import {analyzeDayRoute,boardPlace,buildGoogleMapsDayRoute,dayRouteStops,placeArea,routeOrderChanged,suggestDayOrder} from '@/lib/board-planner';
 import {locationResolution,suggestedLocationMatches} from '@/lib/location-resolver';
+import {buildTripReadiness} from '@/lib/trip-readiness';
+import type {ReadinessTarget} from '@/lib/trip-readiness';
 import {deleteReservationAttachment,listReservationAttachments,saveReservationAttachment} from '@/lib/attachments';
 import type {ReservationAttachment} from '@/lib/attachments';
 import type {ItineraryHoursCheck} from '@/lib/place-hours';
@@ -433,6 +435,7 @@ export default function TripApp(){
  const nearbySuggestions=useMemo(()=>{if(!state||!currentDay)return[];const rank={must:0,possible:1,backup:2};return state.places.filter(place=>placeMatchesDay(place,currentDay.city,currentDay.date)&&!place.visited).sort((a,b)=>rank[a.priority]-rank[b.priority]).slice(0,6);},[state,currentDay]);
  const assistant=useMemo(()=>state?buildAssistantState(state,now,liveLocation??undefined):null,[state,now,liveLocation]);
  const reservations=useMemo(()=>state?state.days.flatMap(day=>day.items.flatMap(item=>isFixedItem(item)?[{day,item}]:[])):[],[state]);
+ const readiness=useMemo(()=>state?buildTripReadiness(state):null,[state]);
  const activeNavGroup=navGroups.find(group=>group.tabs.includes(tab))??navGroups[0];
 
  if(!state)return <main className="shell"><div className="card">Loading trip…</div></main>;
@@ -449,7 +452,8 @@ export default function TripApp(){
    <nav className="tabs mainTabs" aria-label="Trip sections">{navGroups.map(group=><button key={group.label} className={activeNavGroup.label===group.label?'active':''} onClick={()=>setTab(group.tabs[0])}>{group.label}</button>)}</nav>
    {activeNavGroup.tabs.length>1&&<nav className="subTabs" aria-label={`${activeNavGroup.label} views`}>{activeNavGroup.tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item==='Places'?'Saved Places':item}</button>)}</nav>}
    {tab==='Today'&&currentDay&&<section>
-    <div className="todayHero card"><div><div className="eyebrow">TODAY</div><h2>{currentDay.label} · {currentDay.city}</h2><p className="muted">Recommendations below are selected for this specific itinerary day.</p></div><div className="progressRing" aria-label={`${completedToday} of ${totalToday} complete`}><strong>{completedToday}/{totalToday}</strong><span>done</span></div></div>
+   <div className="todayHero card"><div><div className="eyebrow">TODAY</div><h2>{currentDay.label} · {currentDay.city}</h2><p className="muted">Recommendations below are selected for this specific itinerary day.</p></div><div className="progressRing" aria-label={`${completedToday} of ${totalToday} complete`}><strong>{completedToday}/{totalToday}</strong><span>done</span></div></div>
+    {readiness&&<TripReadinessDashboard readiness={readiness} onOpen={target=>setTab(target)}/>}
     {nextStep?<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><div className="between" style={{alignItems:'flex-start',gap:'16px',marginTop:'6px'}}><div><h2 style={{marginBottom:'4px'}}>{nextStep.title}</h2><div className="muted">{nextStep.time}</div>{nextStep.details&&<p>{nextStep.details}</p>}{nextStep.routeText&&<p className="muted small">🚌 {nextStep.routeText}</p>}{(nextStep.keyInfo||nextStep.confirmationNumber)&&<div style={{marginTop:'12px'}}><strong>Key Info</strong><p style={{whiteSpace:'pre-wrap',marginTop:'4px'}}>{nextStep.keyInfo??nextStep.confirmationNumber}</p></div>}</div><span className="chip">{nextStepIndex+1} of {currentDay.items.length}</span></div><div className="placeActions" style={{marginTop:'14px'}}>{nextStep.mapUrl&&<a className="btn primary" href={nextStep.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}<button className="btn" onClick={()=>toggleDay(currentDayIndex,nextStepIndex)}>Mark complete</button></div></div>:<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><h2 style={{marginTop:'6px'}}>You’re done for today</h2><p className="muted">Every itinerary item for this day is complete.</p></div>}
     <div className="statGrid"><div className="stat"><span>Trip progress</span><strong>{completedTrip}/{tripProgress.length}</strong></div><div className="stat"><span>Saved places</span><strong>{state.places.length}</strong></div><div className="stat"><span>Foods remaining</span><strong>{state.foods.filter(i=>!i.done).length}</strong></div></div>
     <h2 className="sectionTitle">Today’s plan</h2>
@@ -500,6 +504,13 @@ export default function TripApp(){
    {tab==='Checklist'&&<section><div className="pageIntro"><div><div className="eyebrow">PACK SMART</div><h2>Nothing important left behind</h2></div><span className="chip">{state.packing.filter(i=>i.done).length}/{state.packing.length} packed</span></div>{[...new Set(state.packing.map(i=>i.category))].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.packing.map((item,index)=>item.category===group&&<label className={`card checkCard ${item.done?'done':''}`} key={item.id}><input type="checkbox" checked={item.done} onChange={()=>toggleList('packing',index)}/><div>{item.title}</div></label>)}</div></div>)}</section>}
   </main>
  </>;
+}
+
+function TripReadinessDashboard({readiness,onOpen}:{readiness:ReturnType<typeof buildTripReadiness>;onOpen:(target:ReadinessTarget)=>void}){
+ return <section className="card readinessDashboard" aria-labelledby="trip-readiness-title">
+  <div className="readinessHeader"><div><div className="eyebrow">TRIP READINESS</div><h2 id="trip-readiness-title">{readiness.readyCount} of {readiness.checks.length} planning areas ready</h2><p className="muted small">A calm overview of details worth checking before departure.</p></div><div className="readinessFixed"><strong>{readiness.keyInfoComplete}/{readiness.fixedPlanCount}</strong><span>fixed plans with Key Info</span></div></div>
+  <div className="readinessGrid">{readiness.checks.map(check=><button className={`readinessCard status-${check.status}`} onClick={()=>onOpen(check.target)} key={check.id}><span className="readinessIcon" aria-hidden="true">{check.status==='ready'?'✓':check.status==='attention'?'!':'•'}</span><span className="readinessCopy"><strong>{check.label}</strong><b>{check.value}</b><small>{check.detail}</small></span><span className="readinessArrow" aria-hidden="true">→</span></button>)}</div>
+ </section>;
 }
 
 type DragPosition={dayIndex:number;itemIndex:number};
