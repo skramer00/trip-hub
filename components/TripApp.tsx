@@ -5,17 +5,18 @@ import {buildAssistantState,estimatedItemDuration,findNearbyPlaces,findSuggestio
 import {checkItineraryHours} from '@/lib/place-hours';
 import {areaOptions,suggestedAreaNames,suggestPlaceArea} from '@/lib/place-areas';
 import {analyzeDayRoute,boardPlace,buildGoogleMapsDayRoute,dayRouteStops,placeArea,routeOrderChanged,suggestDayOrder} from '@/lib/board-planner';
+import {locationResolution,suggestedLocationMatches} from '@/lib/location-resolver';
 import {deleteReservationAttachment,listReservationAttachments,saveReservationAttachment} from '@/lib/attachments';
 import type {ReservationAttachment} from '@/lib/attachments';
 import type {ItineraryHoursCheck} from '@/lib/place-hours';
 import type {AssistantLocation,AssistantState,SuggestedPlace} from '@/lib/assistant';
 import type {ItineraryItem,Place,TripState,Weekday} from '@/lib/types';
 
-const tabs=['Today','Assistant','Nearby','Board','Itinerary','Reservations','Food','Places','Hours','Checklist'] as const;
+const tabs=['Today','Assistant','Nearby','Board','Itinerary','Locations','Reservations','Food','Places','Hours','Checklist'] as const;
 type Tab=(typeof tabs)[number];
 const navGroups=[
  {label:'Today',tabs:['Today','Assistant'] as Tab[]},
- {label:'Plan',tabs:['Board','Itinerary','Reservations'] as Tab[]},
+ {label:'Plan',tabs:['Board','Itinerary','Locations','Reservations'] as Tab[]},
  {label:'Explore',tabs:['Nearby','Places','Hours'] as Tab[]},
  {label:'Food',tabs:['Food'] as Tab[]},
  {label:'Checklist',tabs:['Checklist'] as Tab[]}
@@ -72,6 +73,11 @@ function timeValue(value:string){
 
 function sortItems(items:ItineraryItem[]){return [...items].sort((a,b)=>timeValue(a.time)-timeValue(b.time));}
 function mapsUrl(destination:string){return destination.trim()?`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination.trim())}&travelmode=transit`:'';}
+function itineraryItemRegion(day:TripState['days'][number],item:ItineraryItem){
+ const locationText=`${item.title} ${item.destination??''}`.toLowerCase();
+ if(/\b(lax|los angeles|california)\b/.test(locationText))return 'Other';
+ return day.city.includes('Toronto')?'Toronto':'Niagara & Buffalo';
+}
 
 export default function TripApp(){
  const [state,setState]=useState<TripState|null>(null);
@@ -363,6 +369,38 @@ export default function TripApp(){
   setCategory('All');
   setPriority('All');
  }
+ function linkItineraryLocation(di:number,ii:number,placeId:string){
+  if(!state)return;
+  const next=structuredClone(state);
+  const item=next.days[di].items[ii];
+  const place=next.places.find(candidate=>candidate.id===placeId);
+  if(!place)return;
+  item.placeId=place.id;
+  item.destination=place.formattedAddress||place.name;
+  item.mapUrl=mapsUrl(item.destination);
+  void persist(next);
+ }
+ function clearItineraryLocation(di:number,ii:number){
+  if(!state)return;
+  const next=structuredClone(state);
+  delete next.days[di].items[ii].placeId;
+  void persist(next);
+ }
+ function createAndLinkItineraryLocation(di:number,ii:number){
+  if(!state)return;
+  const next=structuredClone(state);
+  const day=next.days[di];
+  const item=day.items[ii];
+  const region=itineraryItemRegion(day,item);
+  const category=item.type==='food'?'Food':item.type==='hotel'?'Hotel':item.type==='travel'?'Transit':'Attraction';
+  const id=`place-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  const place:Place={id,name:item.title,region,category,notes:item.details??'',mapUrl:item.mapUrl??'',menuUrl:'',websiteUrl:'',tags:[],priority:'possible',visited:false,estimatedDuration:item.estimatedDuration??60,formattedAddress:item.destination?.trim()||undefined};
+  next.places.unshift(place);
+  item.placeId=id;
+  item.destination=place.formattedAddress||place.name;
+  item.mapUrl=mapsUrl(item.destination);
+  void persist(next);
+ }
  function duplicatePlace(id:string){
   if(!state)return;
   const next=structuredClone(state);
@@ -444,6 +482,7 @@ export default function TripApp(){
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
    {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2></div><div className="placeActions">{itineraryHoursIssues.length>0&&<span className="chip hoursIssueCount">{itineraryHoursIssues.length} hours notice{itineraryHoursIssues.length===1?'':'s'}</span>}<span className="chip">{completedTrip}/{tripProgress.length} complete</span></div></div>{state.days.map((day,di)=><article className="card dayCard" key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>addItem(di)}>+ Add stop</button></div></div>{day.items.map((item,ii)=>{const hoursCheck=checkItineraryHours(item,day.date,state.places);return <div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor item={item} dayIndex={di} itemIndex={ii} days={state.days} places={state.places} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div></div>;})}</article>)}</section>}
+   {tab==='Locations'&&<LocationResolver days={state.days} places={state.places} onLink={linkItineraryLocation} onClear={clearItineraryLocation} onCreate={createAndLinkItineraryLocation} onOpenItem={itemId=>{setTab('Itinerary');window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);}}/>}
    {tab==='Reservations'&&<ReservationsView reservations={reservations} onShowItem={itemId=>{
     setTab('Itinerary');
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
@@ -619,6 +658,47 @@ function DayRoutePanel({day,places,onApply,onClose}:{day:TripState['days'][numbe
    <article className="dayRouteOption"><div className="between"><div><div className="eyebrow">CURRENT ORDER</div><strong>{currentRoute.totalTravelMinutes?`≈ ${currentRoute.totalTravelMinutes} min travel`:'Travel estimate unavailable'}</strong></div><span className="chip neutral">{currentRoute.linkedStops} linked</span></div>{stopList(currentStops)}{routeButtons(day)}</article>
    <article className={`dayRouteOption suggested ${changed?'changed':'same'}`}><div className="between"><div><div className="eyebrow">SUGGESTED ORDER</div><strong>{suggestedRoute.totalTravelMinutes?`≈ ${suggestedRoute.totalTravelMinutes} min travel`:'Travel estimate unavailable'}</strong></div><span className="chip">{changed?'Alternative':'Already efficient'}</span></div>{stopList(suggestedStops)}{routeButtons(suggestedDay)}<button className="btn primary routeApply" onClick={onApply} disabled={!changed}>Apply suggested order</button><p className="muted routeFinePrint">Fixed plans stay anchored. Only flexible stops are rearranged.</p></article>
   </div>
+ </section>;
+}
+
+function LocationResolver({days,places,onLink,onClear,onCreate,onOpenItem}:{days:TripState['days'];places:Place[];onLink:(dayIndex:number,itemIndex:number,placeId:string)=>void;onClear:(dayIndex:number,itemIndex:number)=>void;onCreate:(dayIndex:number,itemIndex:number)=>void;onOpenItem:(itemId:string)=>void}){
+ const [statusFilter,setStatusFilter]=useState<'needs'|'all'|'linked'|'auto'|'text'|'missing'>('needs');
+ const [dayFilter,setDayFilter]=useState('All');
+ const [search,setSearch]=useState('');
+ const entries=days.flatMap((day,dayIndex)=>day.items.map((item,itemIndex)=>({day,dayIndex,item,itemIndex,resolution:locationResolution(item,places)})));
+ const counts={linked:entries.filter(entry=>entry.resolution.status==='linked').length,auto:entries.filter(entry=>entry.resolution.status==='auto').length,text:entries.filter(entry=>entry.resolution.status==='text').length,missing:entries.filter(entry=>entry.resolution.status==='missing').length};
+ const needle=search.trim().toLowerCase();
+ const filtered=entries.filter(entry=>{
+  if(dayFilter!=='All'&&entry.day.date!==dayFilter)return false;
+  if(statusFilter==='needs'&&entry.resolution.status==='linked')return false;
+  if(statusFilter!=='all'&&statusFilter!=='needs'&&entry.resolution.status!==statusFilter)return false;
+  return !needle||`${entry.item.title} ${entry.item.destination??''} ${entry.day.city}`.toLowerCase().includes(needle);
+ });
+ const statusCopy={linked:'Linked',auto:'Suggested match',text:'Text only',missing:'Missing'} as const;
+ return <section>
+  <div className="pageIntro"><div><div className="eyebrow">LOCATION RESOLVER</div><h2>Make every stop route-ready</h2><p className="muted">Link itinerary stops to saved places so routes, neighborhoods, hours, and Assistant suggestions stay accurate.</p></div><span className="chip">{counts.linked}/{entries.length} explicitly linked</span></div>
+  <div className="locationStats">
+   <button className={statusFilter==='linked'?'active':''} onClick={()=>setStatusFilter('linked')}><strong>{counts.linked}</strong><span>Linked</span></button>
+   <button className={statusFilter==='auto'?'active':''} onClick={()=>setStatusFilter('auto')}><strong>{counts.auto}</strong><span>Suggested matches</span></button>
+   <button className={statusFilter==='text'?'active':''} onClick={()=>setStatusFilter('text')}><strong>{counts.text}</strong><span>Text only</span></button>
+   <button className={statusFilter==='missing'?'active':''} onClick={()=>setStatusFilter('missing')}><strong>{counts.missing}</strong><span>Missing</span></button>
+  </div>
+  <div className="card locationResolverFilters"><input className="field" aria-label="Search itinerary locations" placeholder="Search itinerary stops…" value={search} onChange={event=>setSearch(event.target.value)}/><select className="field" aria-label="Filter locations by day" value={dayFilter} onChange={event=>setDayFilter(event.target.value)}><option>All</option>{days.map(day=><option value={day.date} key={day.date}>{day.label} · {day.city}</option>)}</select><select className="field" aria-label="Filter by location status" value={statusFilter} onChange={event=>setStatusFilter(event.target.value as typeof statusFilter)}><option value="needs">Needs attention</option><option value="all">All stops</option><option value="linked">Linked</option><option value="auto">Suggested matches</option><option value="text">Text only</option><option value="missing">Missing</option></select></div>
+  <div className="locationResolverList">{filtered.map(entry=>{
+   const region=itineraryItemRegion(entry.day,entry.item);
+   const regionPlaces=places.filter(place=>place.region===region).sort((a,b)=>a.name.localeCompare(b.name));
+   const suggestions=suggestedLocationMatches(entry.item,places,region);
+   const resolvedPlace=entry.resolution.place;
+   return <article className={`card locationResolverCard resolution-${entry.resolution.status}`} key={entry.item.id}>
+    <div className="locationResolverMain"><div className="between"><div><div className="eyebrow">{entry.day.label} · {entry.day.city}</div><h3>{entry.item.title}</h3></div><span className={`locationStatus status-${entry.resolution.status}`}>{statusCopy[entry.resolution.status]}</span></div>
+     <p className="muted small">{entry.item.destination||'No destination has been entered.'}</p>
+     {resolvedPlace&&<div className="resolvedPlace"><strong>{entry.resolution.status==='linked'?'Linked place':'Suggested saved place'}</strong><span>{resolvedPlace.name}{resolvedPlace.area?` · ${resolvedPlace.area.split(' — ').at(-1)}`:''}</span></div>}
+     {suggestions.length>0&&entry.resolution.status!=='linked'&&<div className="locationSuggestions"><span>Quick matches</span><div>{suggestions.map(place=><button className="btn" onClick={()=>onLink(entry.dayIndex,entry.itemIndex,place.id)} key={place.id}>{place.name}</button>)}</div></div>}
+    </div>
+    <div className="locationResolverActions"><label>Choose a saved place<select className="field" aria-label={`Choose saved place for ${entry.item.title}`} value={entry.item.placeId??''} onChange={event=>event.target.value&&onLink(entry.dayIndex,entry.itemIndex,event.target.value)}><option value="">Select a place…</option>{regionPlaces.map(place=><option value={place.id} key={place.id}>{place.name}</option>)}</select></label><div className="placeActions">{entry.resolution.status==='auto'&&resolvedPlace&&<button className="btn primary" onClick={()=>onLink(entry.dayIndex,entry.itemIndex,resolvedPlace.id)}>Confirm match</button>}{(entry.resolution.status==='text'||entry.resolution.status==='missing')&&<button className="btn primary" onClick={()=>onCreate(entry.dayIndex,entry.itemIndex)}>Create & link place</button>}{entry.resolution.status==='linked'&&<button className="btn" onClick={()=>onClear(entry.dayIndex,entry.itemIndex)}>Clear link</button>}<button className="textButton" onClick={()=>onOpenItem(entry.item.id)}>Edit itinerary stop</button></div></div>
+   </article>;
+  })}</div>
+  {!filtered.length&&<div className="card empty">No itinerary stops match these filters.</div>}
  </section>;
 }
 
@@ -1102,7 +1182,7 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDu
    <div className="placeEditorGrid">
     <label>Name<input className="field" value={place.name} onChange={event=>edit({name:event.target.value})} onBlur={save}/></label>
     <label>Category<input className="field" value={place.category} onChange={event=>edit({category:event.target.value})} onBlur={save}/></label>
-    <label>Region<select className="field" value={place.region} onChange={event=>edit({region:event.target.value},true)}><option>Toronto</option><option>Niagara & Buffalo</option></select></label>
+    <label>Region<select className="field" value={place.region} onChange={event=>edit({region:event.target.value},true)}><option>Toronto</option><option>Niagara & Buffalo</option><option>Other</option></select></label>
     <label>Area<input className="field" list={`area-options-${place.id}`} value={place.area??''} placeholder="Choose or type a neighborhood" onChange={event=>edit({area:event.target.value})} onBlur={save}/><datalist id={`area-options-${place.id}`}>{suggestedAreaNames.map(value=><option value={value} key={value}/>)}</datalist>{areaSuggestion&&<button className="areaSuggestion" type="button" onClick={()=>edit({area:areaSuggestion},true)}>Use suggestion: {areaSuggestion}</button>}</label>
     <label>Priority<select className="field" value={place.priority} onChange={event=>edit({priority:event.target.value as Place['priority']},true)}><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></label>
     <label>Visit time (minutes)<input className="field" type="number" min="5" step="5" value={place.estimatedDuration??60} onChange={event=>edit({estimatedDuration:Number(event.target.value)})} onBlur={save}/></label>
