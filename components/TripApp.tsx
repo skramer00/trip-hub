@@ -4,6 +4,7 @@ import {useEffect,useMemo,useState} from 'react';
 import {buildAssistantState,estimatedItemDuration,findNearbyPlaces,findSuggestionCandidates,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
 import {checkItineraryHours} from '@/lib/place-hours';
 import {areaOptions,suggestedAreaNames,suggestPlaceArea} from '@/lib/place-areas';
+import {analyzeDayRoute,boardPlace,placeArea,suggestDayOrder} from '@/lib/board-planner';
 import {deleteReservationAttachment,listReservationAttachments,saveReservationAttachment} from '@/lib/attachments';
 import type {ReservationAttachment} from '@/lib/attachments';
 import type {ItineraryHoursCheck} from '@/lib/place-hours';
@@ -278,6 +279,20 @@ export default function TripApp(){
   setBoardUndo(structuredClone(state));
   addItem(di);
  }
+ function addBoardPlace(place:Place,di:number){
+  if(!state)return;
+  setBoardUndo(structuredClone(state));
+  addPlaceToItinerary(place,di);
+ }
+ function optimizeBoardDay(di:number){
+  if(!state)return;
+  const next=structuredClone(state);
+  const optimized=suggestDayOrder(next.days[di],next.places);
+  if(optimized.every((item,index)=>item.id===next.days[di].items[index]?.id))return;
+  setBoardUndo(structuredClone(state));
+  next.days[di].items=optimized;
+  void persist(next);
+ }
  function undoBoardChange(){
   if(!boardUndo||!state)return;
   const previous=structuredClone(boardUndo);
@@ -424,7 +439,7 @@ export default function TripApp(){
     setPriority('All');
     setTab('Places');
    }}/>}
-   {tab==='Board'&&<TripBoard days={state.days} places={state.places} canUndo={Boolean(boardUndo)} onUndo={undoBoardChange} onMove={moveBoardItem} onDuplicate={duplicateBoardItem} onAdd={addBoardItem} onToggle={toggleDay} onOpenItem={itemId=>{
+   {tab==='Board'&&<TripBoard days={state.days} places={state.places} canUndo={Boolean(boardUndo)} onUndo={undoBoardChange} onMove={moveBoardItem} onDuplicate={duplicateBoardItem} onAdd={addBoardItem} onAddPlace={addBoardPlace} onOptimize={optimizeBoardDay} onToggle={toggleDay} onOpenItem={itemId=>{
     setTab('Itinerary');
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
@@ -450,10 +465,18 @@ export default function TripApp(){
 
 type DragPosition={dayIndex:number;itemIndex:number};
 
-function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onToggle,onOpenItem}:{days:TripState['days'];places:Place[];canUndo:boolean;onUndo:()=>void;onMove:(fromDay:number,fromIndex:number,toDay:number,toIndex:number)=>void;onDuplicate:(dayIndex:number,itemIndex:number)=>void;onAdd:(dayIndex:number)=>void;onToggle:(dayIndex:number,itemIndex:number)=>void;onOpenItem:(itemId:string)=>void}){
+function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPlace,onOptimize,onToggle,onOpenItem}:{days:TripState['days'];places:Place[];canUndo:boolean;onUndo:()=>void;onMove:(fromDay:number,fromIndex:number,toDay:number,toIndex:number)=>void;onDuplicate:(dayIndex:number,itemIndex:number)=>void;onAdd:(dayIndex:number)=>void;onAddPlace:(place:Place,dayIndex:number)=>void;onOptimize:(dayIndex:number)=>void;onToggle:(dayIndex:number,itemIndex:number)=>void;onOpenItem:(itemId:string)=>void}){
  const [dragging,setDragging]=useState<DragPosition|null>(null);
+ const [draggingPlaceId,setDraggingPlaceId]=useState<string|null>(null);
  const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
  const [hiddenDays,setHiddenDays]=useState<Set<string>>(()=>new Set());
+ const [drawerOpen,setDrawerOpen]=useState(true);
+ const [targetDayIndex,setTargetDayIndex]=useState(0);
+ const [placeQuery,setPlaceQuery]=useState('');
+ const [placeAreaFilter,setPlaceAreaFilter]=useState('All');
+ const [placeCategoryFilter,setPlaceCategoryFilter]=useState('All');
+ const [placePriorityFilter,setPlacePriorityFilter]=useState('All');
+ const [placeHoursFilter,setPlaceHoursFilter]=useState<'All'|'Known'|'Missing'|'Ignored'>('All');
  useEffect(()=>{
   try{
    const saved=JSON.parse(localStorage.getItem(boardHiddenDaysKey)??'[]') as string[];
@@ -471,8 +494,12 @@ function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onToggle
  }
  function dropAt(event:React.DragEvent,toDay:number,toIndex:number){
   event.preventDefault();
-  if(dragging)onMove(dragging.dayIndex,dragging.itemIndex,toDay,toIndex);
+  if(draggingPlaceId){
+   const place=places.find(candidate=>candidate.id===draggingPlaceId);
+   if(place)onAddPlace(place,toDay);
+  }else if(dragging)onMove(dragging.dayIndex,dragging.itemIndex,toDay,toIndex);
   setDragging(null);
+  setDraggingPlaceId(null);
  }
  function toggleCollapsed(date:string){
   setCollapsed(current=>{
@@ -481,32 +508,87 @@ function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onToggle
    return next;
   });
  }
+ const targetDay=days[targetDayIndex]??days[0];
+ const targetRegion=targetDay?.city.includes('Toronto')?'Toronto':'Niagara & Buffalo';
+ const scheduledPlaceIds=new Set(
+  days.flatMap(day=>day.items.map(item=>boardPlace(item,places)?.id).filter((id):id is string=>Boolean(id)))
+ );
+ const drawerAreas=areaOptions(places.filter(place=>place.region===targetRegion));
+ const drawerPlaces=places.filter(place=>{
+  if(place.region!==targetRegion||place.visited||scheduledPlaceIds.has(place.id))return false;
+  const text=`${place.name} ${place.notes} ${place.tags.join(' ')}`.toLowerCase();
+  if(placeQuery&&!text.includes(placeQuery.trim().toLowerCase()))return false;
+  if(placeAreaFilter!=='All'&&(place.area??suggestPlaceArea(place))!==placeAreaFilter)return false;
+  if(placeCategoryFilter!=='All'&&place.category!==placeCategoryFilter)return false;
+  if(placePriorityFilter!=='All'&&place.priority!==placePriorityFilter)return false;
+  const hasHours=Boolean(Object.keys(place.weeklyHours??{}).length);
+  if(placeHoursFilter==='Known'&&(!hasHours||place.ignoreHours))return false;
+  if(placeHoursFilter==='Missing'&&(hasHours||place.ignoreHours))return false;
+  if(placeHoursFilter==='Ignored'&&!place.ignoreHours)return false;
+  return true;
+ }).sort((a,b)=>{
+  const rank={must:0,possible:1,backup:2};
+  return rank[a.priority]-rank[b.priority]||(placeArea(a)??'Unassigned').localeCompare(placeArea(b)??'Unassigned')||a.name.localeCompare(b.name);
+ });
+ const groupedDrawerPlaces=[...new Set(drawerPlaces.map(place=>placeArea(place)??'Unassigned'))].map(areaName=>({areaName,places:drawerPlaces.filter(place=>(placeArea(place)??'Unassigned')===areaName)}));
  return <section className="boardBreakout">
-  <div className="pageIntro boardIntro"><div><div className="eyebrow">TRIP BOARD</div><h2>Build the whole trip at a glance</h2><p className="muted">Drag cards within a day or across days. Hide quieter days while you focus on the parts that need planning.</p></div><div className="placeActions"><button className="btn" onClick={onUndo} disabled={!canUndo}>↶ Undo</button><span className="chip">{days.length-hiddenDays.size} of {days.length} days shown</span></div></div>
-  <div className="boardDayFilters card">
-   <div className="between"><div><strong>Days shown</strong><p className="muted small">This view preference stays on this device and does not change the itinerary.</p></div><div className="placeActions"><button className="textButton" onClick={()=>saveHiddenDays(new Set())}>Show all</button><button className="textButton" onClick={()=>saveHiddenDays(new Set(days.map(day=>day.date)))}>Hide all</button></div></div>
-   <div className="boardDayChoices">
-    {days.map(day=><label className={`boardDayChoice ${hiddenDays.has(day.date)?'hidden':''}`} key={day.date}><input type="checkbox" checked={!hiddenDays.has(day.date)} onChange={()=>toggleDayVisibility(day.date)}/><span><strong>{day.label}</strong><small>{day.city}</small></span></label>)}
+  <div className="pageIntro boardIntro"><div><div className="eyebrow">TRIP BOARD</div><h2>Build the whole trip at a glance</h2><p className="muted">Drag saved places into a day, keep fixed plans anchored, and use route hints to reduce backtracking.</p></div><div className="placeActions"><button className="btn" onClick={()=>setDrawerOpen(value=>!value)}>{drawerOpen?'Hide':'Show'} place drawer</button><button className="btn" onClick={onUndo} disabled={!canUndo}>↶ Undo</button><span className="chip">{days.length-hiddenDays.size} of {days.length} days shown</span></div></div>
+  <div className={`boardPlannerLayout ${drawerOpen?'drawerOpen':''}`}>
+   {drawerOpen&&<aside className="boardPlaceDrawer card">
+    <div className="between"><div><div className="eyebrow">UNSCHEDULED IDEAS</div><h3>Saved places</h3></div><span className="chip">{drawerPlaces.length}</span></div>
+    <p className="muted small">Drag a card onto any visible day, or use Add to place it at the end of the selected day.</p>
+    <label>Planning day<select className="field" value={targetDayIndex} onChange={event=>{setTargetDayIndex(Number(event.target.value));setPlaceAreaFilter('All');}}>{days.map((day,index)=><option value={index} key={day.date}>{day.label} · {day.city}</option>)}</select></label>
+    <input className="field" value={placeQuery} onChange={event=>setPlaceQuery(event.target.value)} placeholder="Search saved places…" aria-label="Search unscheduled places"/>
+    <div className="boardDrawerFilters">
+     <select className="field" aria-label="Filter drawer by neighborhood" value={placeAreaFilter} onChange={event=>setPlaceAreaFilter(event.target.value)}><option>All</option>{drawerAreas.map(value=><option value={value} key={value}>{value}</option>)}</select>
+     <select className="field" aria-label="Filter drawer by category" value={placeCategoryFilter} onChange={event=>setPlaceCategoryFilter(event.target.value)}><option>All</option>{[...new Set(places.filter(place=>place.region===targetRegion).map(place=>place.category))].sort().map(value=><option value={value} key={value}>{value}</option>)}</select>
+     <select className="field" aria-label="Filter drawer by priority" value={placePriorityFilter} onChange={event=>setPlacePriorityFilter(event.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select>
+     <select className="field" aria-label="Filter drawer by saved hours" value={placeHoursFilter} onChange={event=>setPlaceHoursFilter(event.target.value as typeof placeHoursFilter)}><option>All</option><option>Known</option><option>Missing</option><option>Ignored</option></select>
+    </div>
+    <div className="boardPlaceGroups">
+     {groupedDrawerPlaces.map(group=><section className="boardPlaceGroup" key={group.areaName}><h4>{group.areaName.split(' — ').at(-1)} <span>{group.places.length}</span></h4>{group.places.map(place=>{const hasHours=Boolean(Object.keys(place.weeklyHours??{}).length);return <article className={`boardPlaceIdea priority-border-${place.priority} ${draggingPlaceId===place.id?'dragging':''}`} draggable onDragStart={event=>{setDraggingPlaceId(place.id);setDragging(null);event.dataTransfer.effectAllowed='copy';event.dataTransfer.setData('text/plain',place.id);}} onDragEnd={()=>setDraggingPlaceId(null)} key={place.id}>
+      <div className="between"><strong>{place.name}</strong><span className={`priority priority-${place.priority}`}>{place.priority==='must'?'Must':place.priority}</span></div>
+      <div className="boardIdeaMeta"><span>{place.category}</span><span>{place.estimatedDuration??60} min</span><span>{place.ignoreHours?'Hours ignored':hasHours?'Hours saved':'Hours missing'}</span></div>
+      <button className="btn" onClick={()=>onAddPlace(place,targetDayIndex)}>Add to {targetDay.label}</button>
+     </article>;})}</section>)}
+     {!drawerPlaces.length&&<div className="empty boardDrawerEmpty">No unscheduled places match these filters.</div>}
+    </div>
+   </aside>}
+   <div className="boardPlannerMain">
+    <div className="boardDayFilters card">
+     <div className="between"><div><strong>Days shown</strong><p className="muted small">This view preference stays on this device and does not change the itinerary.</p></div><div className="placeActions"><button className="textButton" onClick={()=>saveHiddenDays(new Set())}>Show all</button><button className="textButton" onClick={()=>saveHiddenDays(new Set(days.map(day=>day.date)))}>Hide all</button></div></div>
+     <div className="boardDayChoices">
+      {days.map(day=><label className={`boardDayChoice ${hiddenDays.has(day.date)?'hidden':''}`} key={day.date}><input type="checkbox" checked={!hiddenDays.has(day.date)} onChange={()=>toggleDayVisibility(day.date)}/><span><strong>{day.label}</strong><small>{day.city}</small></span></label>)}
+     </div>
+    </div>
+    {hiddenDays.size===days.length&&<div className="empty card boardEmpty"><strong>All days are hidden.</strong><span>Select a day above or choose Show all to bring the board back.</span></div>}
+    <div className="tripBoard" aria-label="Trip itinerary board">
+     {days.map((day,di)=>({day,di})).filter(({day})=>!hiddenDays.has(day.date)).map(({day,di})=>{
+      const isCollapsed=collapsed.has(day.date);
+      const route=analyzeDayRoute(day,places);
+      return <article className={`boardColumn ${isCollapsed?'collapsed':''} ${draggingPlaceId?'acceptingPlace':''}`} key={day.date} onDragOver={event=>event.preventDefault()} onDrop={event=>dropAt(event,di,day.items.length)}>
+       <header className="boardColumnHeader"><button className="boardCollapse" onClick={()=>toggleCollapsed(day.date)} aria-expanded={!isCollapsed} aria-label={`${isCollapsed?'Expand':'Collapse'} ${day.label}`}>{isCollapsed?'▸':'▾'}</button><div><div className="eyebrow">{day.date}</div><h3>{day.label}</h3><p>{day.city}</p></div><span className="chip neutral">{day.items.length}</span></header>
+       {!isCollapsed&&<>
+        <div className="boardRouteSummary"><div><strong>{route.linkedStops} routed stops</strong><span>{route.totalTravelMinutes?`≈ ${route.totalTravelMinutes} min transit · ${route.totalDistanceKm.toFixed(1)} km`:'Add linked places for travel estimates'}</span></div><button className="textButton" onClick={()=>onOptimize(di)} disabled={!route.canOptimize}>Suggest order</button></div>
+        {route.warnings.length>0&&<div className="boardRouteWarnings">{route.warnings.slice(0,2).map(warning=><span key={warning}>⚠ {warning}</span>)}</div>}
+        <div className="boardCards">
+         {day.items.map((item,ii)=>{const boardType=inferItemType(item);const linkedPlace=boardPlace(item,places);const linkedArea=placeArea(linkedPlace);const segment=route.segments.get(item.id);return <div className="boardCardStack" key={item.id}>
+          {segment&&<div className={`boardRouteGap route-${segment.kind}`}>↳ {segment.label}</div>}
+          <article className={`boardCard board-${boardType} ${item.done?'complete':''} ${dragging?.dayIndex===di&&dragging.itemIndex===ii?'dragging':''}`} draggable onDragStart={event=>{setDragging({dayIndex:di,itemIndex:ii});setDraggingPlaceId(null);event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',item.id);}} onDragEnd={()=>setDragging(null)} onDragOver={event=>event.preventDefault()} onDrop={event=>{event.stopPropagation();dropAt(event,di,ii);}}>
+           <div className="boardCardTop"><button className="dragHandle" aria-label={`Drag ${item.title}`} title="Drag to move">⋮⋮</button><span className="boardTime">{item.time}</span><label className="boardCheck"><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>onToggle(di,ii)}/></label></div>
+           <button className="boardCardTitle" onClick={()=>onOpenItem(item.id)}>{item.title}</button>
+           {item.destination&&<p className="boardDestination">{item.destination}</p>}
+           <div className="boardBadges"><span className={`boardType type-${boardType}`}>{boardType}</span><span className={`chip ${isFixedItem(item)?'':'neutral'}`}>{isFixedItem(item)?'Fixed':'Flexible'}</span>{linkedArea&&<span className="chip boardArea">{linkedArea.split(' — ').at(-1)}</span>}{item.optional&&<span className="chip neutral">Optional</span>}</div>
+           <div className="boardCardActions"><button onClick={()=>ii>0&&onMove(di,ii,di,ii-1)} disabled={ii===0} aria-label={`Move ${item.title} up`}>↑</button><button onClick={()=>ii<day.items.length-1&&onMove(di,ii,di,ii+2)} disabled={ii===day.items.length-1} aria-label={`Move ${item.title} down`}>↓</button><select aria-label={`Move ${item.title} to another day`} value={di} onChange={event=>onMove(di,ii,Number(event.target.value),days[Number(event.target.value)].items.length)}>{days.map((target,targetIndex)=><option value={targetIndex} key={target.date}>{target.label}</option>)}</select><button onClick={()=>onDuplicate(di,ii)} aria-label={`Duplicate ${item.title}`}>⧉</button></div>
+          </article>
+         </div>;})}
+         <button className="boardAdd" onClick={()=>onAdd(di)}>+ Add stop</button>
+        </div>
+       </>}
+      </article>;
+     })}
+    </div>
    </div>
-  </div>
-  {hiddenDays.size===days.length&&<div className="empty card boardEmpty"><strong>All days are hidden.</strong><span>Select a day above or choose Show all to bring the board back.</span></div>}
-  <div className="tripBoard" aria-label="Trip itinerary board">
-   {days.map((day,di)=>({day,di})).filter(({day})=>!hiddenDays.has(day.date)).map(({day,di})=>{
-    const isCollapsed=collapsed.has(day.date);
-    return <article className={`boardColumn ${isCollapsed?'collapsed':''}`} key={day.date} onDragOver={event=>event.preventDefault()} onDrop={event=>dropAt(event,di,day.items.length)}>
-     <header className="boardColumnHeader"><button className="boardCollapse" onClick={()=>toggleCollapsed(day.date)} aria-expanded={!isCollapsed} aria-label={`${isCollapsed?'Expand':'Collapse'} ${day.label}`}>{isCollapsed?'▸':'▾'}</button><div><div className="eyebrow">{day.date}</div><h3>{day.label}</h3><p>{day.city}</p></div><span className="chip neutral">{day.items.length}</span></header>
-     {!isCollapsed&&<div className="boardCards">
-      {day.items.map((item,ii)=>{const boardType=inferItemType(item);const linkedPlace=item.placeId?places.find(place=>place.id===item.placeId):undefined;return <article className={`boardCard board-${boardType} ${item.done?'complete':''} ${dragging?.dayIndex===di&&dragging.itemIndex===ii?'dragging':''}`} draggable onDragStart={event=>{setDragging({dayIndex:di,itemIndex:ii});event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',item.id);}} onDragEnd={()=>setDragging(null)} onDragOver={event=>event.preventDefault()} onDrop={event=>{event.stopPropagation();dropAt(event,di,ii);}} key={item.id}>
-       <div className="boardCardTop"><button className="dragHandle" aria-label={`Drag ${item.title}`} title="Drag to move">⋮⋮</button><span className="boardTime">{item.time}</span><label className="boardCheck"><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>onToggle(di,ii)}/></label></div>
-       <button className="boardCardTitle" onClick={()=>onOpenItem(item.id)}>{item.title}</button>
-       {item.destination&&<p className="boardDestination">{item.destination}</p>}
-       <div className="boardBadges"><span className={`boardType type-${boardType}`}>{boardType}</span><span className={`chip ${isFixedItem(item)?'':'neutral'}`}>{isFixedItem(item)?'Fixed':'Flexible'}</span>{linkedPlace?.area&&<span className="chip boardArea">{linkedPlace.area.split(' — ').at(-1)}</span>}{item.optional&&<span className="chip neutral">Optional</span>}</div>
-       <div className="boardCardActions"><button onClick={()=>ii>0&&onMove(di,ii,di,ii-1)} disabled={ii===0} aria-label={`Move ${item.title} up`}>↑</button><button onClick={()=>ii<day.items.length-1&&onMove(di,ii,di,ii+2)} disabled={ii===day.items.length-1} aria-label={`Move ${item.title} down`}>↓</button><select aria-label={`Move ${item.title} to another day`} value={di} onChange={event=>onMove(di,ii,Number(event.target.value),days[Number(event.target.value)].items.length)}>{days.map((target,targetIndex)=><option value={targetIndex} key={target.date}>{target.label}</option>)}</select><button onClick={()=>onDuplicate(di,ii)} aria-label={`Duplicate ${item.title}`}>⧉</button></div>
-      </article>;})}
-      <button className="boardAdd" onClick={()=>onAdd(di)}>+ Add stop</button>
-     </div>}
-    </article>;
-   })}
   </div>
  </section>;
 }
