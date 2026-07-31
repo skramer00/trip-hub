@@ -27,10 +27,11 @@ export type BoardRouteStop={
  place?:Place;
  query?:string;
  area?:string;
- locationQuality:'linked'|'text'|'missing';
+ locationQuality:'linked'|'text'|'missing'|'ignored';
 };
 
 export function boardPlace(item:ItineraryItem,places:Place[]){
+ if(item.locationNotNeeded)return undefined;
  return findItineraryPlace(item,places);
 }
 
@@ -45,6 +46,7 @@ function placeQuery(place:Place){
 
 export function dayRouteStops(day:TripDay,places:Place[]):BoardRouteStop[]{
  return day.items.map(item=>{
+  if(item.locationNotNeeded)return {item,locationQuality:'ignored' as const};
   const place=boardPlace(item,places);
   if(place)return {item,place,query:placeQuery(place),area:placeArea(place),locationQuality:'linked' as const};
   const query=item.destination?.trim();

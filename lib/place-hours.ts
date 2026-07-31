@@ -16,6 +16,7 @@ function normalized(value:string){
 }
 
 export function findItineraryPlace(item:ItineraryItem,places:Place[]){
+ if(item.locationNotNeeded)return undefined;
  if(item.placeId){
   const linked=places.find(place=>place.id===item.placeId);
   if(linked)return linked;

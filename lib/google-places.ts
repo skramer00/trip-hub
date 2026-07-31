@@ -1,4 +1,4 @@
-import type {Place,PlaceHoursInterval,PlaceHoursRange,Weekday} from '@/lib/types';
+import type {GooglePlaceCandidate,Place,PlaceHoursInterval,PlaceHoursRange,Weekday} from '@/lib/types';
 
 const WEEKDAYS:Weekday[]=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
 
@@ -73,8 +73,20 @@ function questionableMatch(savedName:string,matchedName:string){
 }
 
 export async function fetchGooglePlace(place:Place){
+ const matches=await searchGooglePlaces(queryFor(place),place.region,1);
+ const match=matches[0];
+ if(!match)throw new Error(`Google could not find a match for “${place.name}”.`);
+ return {
+  matchedName:match.name,
+  matchWarning:questionableMatch(place.name,match.name)?`Check this match: Google returned “${match.name}”.`:undefined,
+  ...match,
+ };
+}
+
+export async function searchGooglePlaces(query:string,region:string,limit=5):Promise<GooglePlaceCandidate[]>{
  const apiKey=process.env.GOOGLE_PLACES_API_KEY;
  if(!apiKey)throw new Error('GOOGLE_PLACES_API_KEY is not configured.');
+ const area=region==='Toronto'?'Toronto, Ontario, Canada':region==='Niagara & Buffalo'?'Niagara Falls or Buffalo, New York':'United States or Canada';
  const response=await fetch('https://places.googleapis.com/v1/places:searchText',{
   method:'POST',
   headers:{
@@ -82,7 +94,7 @@ export async function fetchGooglePlace(place:Place){
    'X-Goog-Api-Key':apiKey,
    'X-Goog-FieldMask':'places.id,places.displayName,places.formattedAddress,places.location,places.googleMapsUri,places.websiteUri,places.regularOpeningHours',
   },
-  body:JSON.stringify({textQuery:queryFor(place),pageSize:1,languageCode:'en'}),
+  body:JSON.stringify({textQuery:`${query}, ${area}`,pageSize:Math.min(8,Math.max(1,limit)),languageCode:'en'}),
   cache:'no-store',
  });
  if(!response.ok){
@@ -90,18 +102,14 @@ export async function fetchGooglePlace(place:Place){
   throw new Error(`Google Places returned ${response.status}: ${message.slice(0,300)}`);
  }
  const result=await response.json() as {places?:GooglePlace[]};
- const match=result.places?.[0];
- if(!match)throw new Error(`Google could not find a match for “${place.name}”.`);
- const matchedName=match.displayName?.text??place.name;
- return {
-  matchedName,
-  matchWarning:questionableMatch(place.name,matchedName)?`Check this match: Google returned “${matchedName}”.`:undefined,
+ return (result.places??[]).flatMap(match=>match.id?[{
   googlePlaceId:match.id,
+  name:match.displayName?.text??query,
   formattedAddress:match.formattedAddress,
   latitude:match.location?.latitude,
   longitude:match.location?.longitude,
   mapUrl:match.googleMapsUri,
   websiteUrl:match.websiteUri,
-  weeklyHours:rangesFromPeriods(match.regularOpeningHours?.periods),
- };
+  weeklyHours:match.regularOpeningHours?.periods?.length?rangesFromPeriods(match.regularOpeningHours.periods):undefined,
+ }]:[]);
 }

@@ -1,9 +1,10 @@
 export type ItineraryItemType='reservation'|'activity'|'food'|'travel'|'hotel';
-export type ItineraryItem={id:string,time:string,title:string,details?:string,done:boolean,optional?:boolean,destination?:string,mapUrl?:string,routeText?:string,keyInfo?:string,confirmationNumber?:string,userNotes?:string,fixed?:boolean,type?:ItineraryItemType,estimatedDuration?:number,travelMinutes?:number,prepBuffer?:number,placeId?:string};
+export type ItineraryItem={id:string,time:string,title:string,details?:string,done:boolean,optional?:boolean,destination?:string,mapUrl?:string,routeText?:string,keyInfo?:string,confirmationNumber?:string,userNotes?:string,fixed?:boolean,type?:ItineraryItemType,estimatedDuration?:number,travelMinutes?:number,prepBuffer?:number,placeId?:string,locationNotNeeded?:boolean};
 export type TripDay={date:string,label:string,city:string,items:ItineraryItem[]};
 export type CheckItem={id:string,title:string,category:string,done:boolean,notes?:string};
 export type Weekday='sunday'|'monday'|'tuesday'|'wednesday'|'thursday'|'friday'|'saturday';
 export type PlaceHoursInterval={open:string;close:string};
 export type PlaceHoursRange={open:string;close:string;closed?:boolean;intervals?:PlaceHoursInterval[]};
 export type Place={id:string,name:string,region:string,area?:string,category:string,notes:string,mapUrl:string,menuUrl:string,websiteUrl:string,tags:string[],priority:'must'|'possible'|'backup',visited:boolean,recommendedDates?:string[],estimatedDuration?:number,weeklyHours?:Partial<Record<Weekday,PlaceHoursRange>>,hoursTimeZone?:string,hoursVerifiedAt?:string,googlePlaceId?:string,formattedAddress?:string,hoursSource?:'google'|'manual',ignoreHours?:boolean,latitude?:number,longitude?:number};
+export type GooglePlaceCandidate={googlePlaceId:string;name:string;formattedAddress?:string;latitude?:number;longitude?:number;mapUrl?:string;websiteUrl?:string;weeklyHours?:Partial<Record<Weekday,PlaceHoursRange>>};
 export type TripState={days:TripDay[],foods:CheckItem[],packing:CheckItem[],places:Place[]};

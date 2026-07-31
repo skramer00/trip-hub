@@ -1,9 +1,10 @@
 import {findItineraryPlace} from '@/lib/place-hours';
 import type {ItineraryItem,Place} from '@/lib/types';
 
-export type LocationResolutionStatus='linked'|'auto'|'text'|'missing';
+export type LocationResolutionStatus='linked'|'auto'|'text'|'missing'|'ignored';
 
 export function locationResolution(item:ItineraryItem,places:Place[]){
+ if(item.locationNotNeeded)return {status:'ignored' as const};
  const explicit=item.placeId?places.find(place=>place.id===item.placeId):undefined;
  if(explicit)return {status:'linked' as const,place:explicit};
  const matched=findItineraryPlace(item,places);
@@ -12,7 +13,7 @@ export function locationResolution(item:ItineraryItem,places:Place[]){
  return {status:'missing' as const};
 }
 
-const genericLocationWords=new Set(['airport','international','terminal','arrive','arrival','depart','departure','preboard','flight','transit','station','stop']);
+const genericLocationWords=new Set(['airport','international','terminal','arrive','arrival','depart','departure','preboard','flight','transit','station','stop','clear','customs','check','head','visit','explore','breakfast','lunch','dinner']);
 
 function tokens(value:string){
  return new Set(value.toLowerCase().replace(/[^a-z0-9]+/g,' ').split(' ').filter(token=>token.length>2&&!genericLocationWords.has(token)));
@@ -26,7 +27,7 @@ function matchScore(item:ItineraryItem,place:Place){
  const itemText=`${item.title} ${item.destination??''}`.toLowerCase();
  const placeName=place.name.toLowerCase();
  const exact=itemText.includes(placeName)||placeName.includes(item.title.toLowerCase())?20:0;
- if(!exact&&!overlap)return 0;
+ if(!exact&&overlap<2)return 0;
  return exact+overlap*4+(place.priority==='must'?2:place.priority==='possible'?1:0);
 }
 
