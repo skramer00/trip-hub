@@ -334,7 +334,7 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
  if(place.recommendedDates?.includes(day.date)){score+=30;reasons.push('Recommended for this day');}
  if(placeMatchesDay(place,day)){score+=15;reasons.push(`Fits your ${day.city} plans`);}
  const anchorLocation=context.location??(placeHasCoordinates(context.anchorPlace)?{latitude:context.anchorPlace.latitude,longitude:context.anchorPlace.longitude,label:context.anchorPlace.name}:undefined);
- const anchorArea=context.anchorArea??context.anchorPlace?.area;
+ const anchorArea=context.anchorArea??(context.anchorPlace?(context.anchorPlace.area??suggestPlaceArea(context.anchorPlace)):undefined);
  const placeArea=place.area??suggestPlaceArea(place);
  if(anchorArea&&placeArea===anchorArea){
   score+=18;
