@@ -285,22 +285,22 @@ function scheduledItems(day:TripDay){
 
 export function findCurrentActivity(day:TripDay,now:Date){
  return scheduledItems(day).find(({item,at})=>{
-  if(item.done)return false;
+  if(item.done||item.skipped)return false;
   const end=new Date(at.getTime()+estimatedItemDuration(item)*60000);
   return now>=at&&now<end;
  });
 }
 
 export function findNextItem(day:TripDay,now:Date){
- return scheduledItems(day).find(({item,at})=>!item.done&&at>now);
+ return scheduledItems(day).find(({item,at})=>!item.done&&!item.skipped&&at>now);
 }
 
 export function findNextReservation(day:TripDay,now:Date){
- return scheduledItems(day).find(({item,at})=>!item.done&&isFixedItem(item)&&at>now);
+ return scheduledItems(day).find(({item,at})=>!item.done&&!item.skipped&&isFixedItem(item)&&at>now);
 }
 
 export function findPreviousItem(day:TripDay,now:Date){
- return scheduledItems(day).filter(({at})=>at<=now).at(-1);
+ return scheduledItems(day).filter(({item,at})=>!item.skipped&&at<=now).at(-1);
 }
 
 export function calculateLeaveBy(item:ItineraryItem,at:Date){
@@ -505,7 +505,7 @@ export function buildAssistantState(state:TripState,now=new Date(),location?:Ass
  const previous=findPreviousItem(day,now);
  const leaveBy=reservation?calculateLeaveBy(reservation.item,reservation.at):undefined;
  const availableMinutes=leaveBy?Math.max(0,minutesBetween(now,leaveBy)):next?Math.max(0,minutesBetween(now,next.at)):0;
- const remaining=day.items.filter(item=>!item.done);
+ const remaining=day.items.filter(item=>!item.done&&!item.skipped);
  const allRemainingFlexible=remaining.length>0&&remaining.every(item=>!isFixedItem(item));
  const presentation=buildPresentation({now,day,current,next,reservation,leaveBy,availableMinutes,allRemainingFlexible});
  const suggestionAnchor=current?.item??previous?.item??next?.item;

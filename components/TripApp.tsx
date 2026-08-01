@@ -25,7 +25,7 @@ const navGroups=[
 ] as const;
 type InstallPromptEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
 
-type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'userNotes'|'optional'|'fixed'|'type'|'estimatedDuration'|'travelMinutes'|'prepBuffer'|'placeId'|'locationNotNeeded';
+type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'userNotes'|'optional'|'skipped'|'fixed'|'type'|'estimatedDuration'|'travelMinutes'|'prepBuffer'|'placeId'|'locationNotNeeded';
 type EditableValue=string|boolean|number|undefined;
 const localStateKey='trip-state';
 const pendingSyncKey='trip-state-pending-sync';
@@ -229,11 +229,11 @@ export default function TripApp(){
   setLocationStatus('idle');
   setLocationMessage('');
  }
- function toggleDay(di:number,ii:number){if(!state)return;const next=structuredClone(state);next.days[di].items[ii].done=!next.days[di].items[ii].done;void persist(next);}
- function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='fixed'||key==='locationNotNeeded')item[key]=Boolean(value);else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
+ function toggleDay(di:number,ii:number){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];item.done=!item.done;if(item.done)item.skipped=false;void persist(next);}
+ function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='skipped'||key==='fixed'||key==='locationNotNeeded')item[key]=Boolean(value);else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
  function saveEdits(di?:number){const latest=readLocalState()??state;if(!latest)return;const next=structuredClone(latest);if(di!==undefined)next.days[di].items=sortItems(next.days[di].items);void persist(next);}
  function addItem(di:number){if(!state)return;const next=structuredClone(state);next.days[di].items.push({id:`custom-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:'12:00 PM',title:'New stop',details:'',destination:'',routeText:'',keyInfo:'',userNotes:'',done:false,optional:false,fixed:false,type:'activity',estimatedDuration:60,travelMinutes:20,prepBuffer:15});next.days[di].items=sortItems(next.days[di].items);void persist(next);}
- function addPlaceToItinerary(place:Place,di:number){
+ function addPlaceToItinerary(place:Place,di:number,optional=false){
   if(!state)return;
   const next=structuredClone(state);
   const category=`${place.category} ${place.tags.join(' ')}`.toLowerCase();
@@ -250,7 +250,7 @@ export default function TripApp(){
    keyInfo:'',
    userNotes:'',
    done:false,
-   optional:false,
+   optional,
    fixed:false,
    type,
    estimatedDuration:place.estimatedDuration??60,
@@ -258,6 +258,14 @@ export default function TripApp(){
    prepBuffer:15,
    placeId:place.id
   });
+  void persist(next);
+ }
+ function skipItineraryItem(di:number,itemId:string){
+  if(!state)return;
+  const next=structuredClone(state);
+  const item=next.days[di]?.items.find(candidate=>candidate.id===itemId);
+  if(!item)return;
+  item.skipped=true;
   void persist(next);
  }
  function deleteItem(di:number,ii:number){if(!state||!window.confirm(`Delete “${state.days[di].items[ii].title}”?`))return;const next=structuredClone(state);next.days[di].items.splice(ii,1);void persist(next);}
@@ -476,7 +484,7 @@ export default function TripApp(){
 
  const currentDayIndex=useMemo(()=>(state?activeDayIndex(state.days):0),[state]);
  const currentDay=state?.days[currentDayIndex];
- const nextStepIndex=currentDay?.items.findIndex(item=>!item.done)??-1;
+ const nextStepIndex=currentDay?.items.findIndex(item=>!item.done&&!item.skipped)??-1;
  const nextStep=nextStepIndex>=0?currentDay?.items[nextStepIndex]:undefined;
  const availableAreas=useMemo(()=>areaOptions(state?.places??[]),[state]);
  const unassignedAreaCount=state?.places.filter(place=>!place.area).length??0;
@@ -507,7 +515,7 @@ export default function TripApp(){
     {nextStep?<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><div className="between" style={{alignItems:'flex-start',gap:'16px',marginTop:'6px'}}><div><h2 style={{marginBottom:'4px'}}>{nextStep.title}</h2><div className="muted">{nextStep.time}</div>{nextStep.details&&<p>{nextStep.details}</p>}{nextStep.routeText&&<p className="muted small">🚌 {nextStep.routeText}</p>}{(nextStep.keyInfo||nextStep.confirmationNumber)&&<div style={{marginTop:'12px'}}><strong>Key Info</strong><p style={{whiteSpace:'pre-wrap',marginTop:'4px'}}>{nextStep.keyInfo??nextStep.confirmationNumber}</p></div>}</div><span className="chip">{nextStepIndex+1} of {currentDay.items.length}</span></div><div className="placeActions" style={{marginTop:'14px'}}>{nextStep.mapUrl&&<a className="btn primary" href={nextStep.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}<button className="btn" onClick={()=>toggleDay(currentDayIndex,nextStepIndex)}>Mark complete</button></div></div>:<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><h2 style={{marginTop:'6px'}}>You’re done for today</h2><p className="muted">Every itinerary item for this day is complete.</p></div>}
     <div className="statGrid"><div className="stat"><span>Trip progress</span><strong>{completedTrip}/{tripProgress.length}</strong></div><div className="stat"><span>Saved places</span><strong>{state.places.length}</strong></div><div className="stat"><span>Foods remaining</span><strong>{state.foods.filter(i=>!i.done).length}</strong></div></div>
     <h2 className="sectionTitle">Today’s plan</h2>
-    {currentDay.items.map((item,index)=>{const hoursCheck=checkItineraryHours(item,currentDay.date,state.places);return <div className={`card timelineItem ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(currentDayIndex,index)}/><div className="timeBadge">{item.time}</div><ItineraryDetails item={item} places={state.places} dayIndex={currentDayIndex} itemIndex={index} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(currentDayIndex)} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div>;})}
+    {currentDay.items.map((item,index)=>{const hoursCheck=checkItineraryHours(item,currentDay.date,state.places);return <div className={`card timelineItem ${item.done?'done':''} ${item.skipped?'skipped':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(currentDayIndex,index)}/><div className="timeBadge">{item.time}</div><ItineraryDetails item={item} places={state.places} dayIndex={currentDayIndex} itemIndex={index} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(currentDayIndex)} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div>;})}
     <div className="between sectionHeading"><h2 className="sectionTitle">Recommended for this day</h2><button className="textButton" onClick={()=>{setRegion(currentDay.city.includes('Toronto')?'Toronto':'Niagara & Buffalo');setArea('All');setTab('Places');}}>See all</button></div>
     <div className="grid compactGrid">{nearbySuggestions.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>
    </section>}
@@ -515,7 +523,7 @@ export default function TripApp(){
     const day=state.days[assistant.currentDayIndex];
     const itemIndex=day?.items.findIndex(candidate=>candidate.id===item.id)??-1;
     if(itemIndex>=0)toggleDay(assistant.currentDayIndex,itemIndex);
-   }} onVisited={toggleVisited} onShowPlaces={place=>{
+   }} onSkip={item=>skipItineraryItem(assistant.currentDayIndex,item.id)} onAddToToday={place=>addPlaceToItinerary(place,assistant.currentDayIndex,true)} onVisited={toggleVisited} onShowPlaces={place=>{
     setQuery(place.name);
     setRegion(place.region);
     setArea('All');
@@ -906,7 +914,7 @@ function ItineraryEditor({item,dayIndex,itemIndex,days,places,hoursCheck,onEdit,
  return <div className="timelineCopy">
   <div className="between itinerarySummary">
    <div>
-    <div className="titleRow"><h3>{item.title}</h3><span className={`chip ${fixed?'':'neutral'}`}>{fixed?'Fixed':'Flexible'}</span><span className="chip neutral">{itemType}</span>{linkedArea&&<span className="chip boardArea">{linkedArea.split(' — ').at(-1)}</span>}{item.optional&&<span className="chip neutral">Optional</span>}{hoursCheck&&<span className={`itineraryHoursBadge check-${hoursCheck.status}`}>{hoursCheck.label}</span>}</div>
+    <div className="titleRow"><h3>{item.title}</h3><span className={`chip ${fixed?'':'neutral'}`}>{fixed?'Fixed':'Flexible'}</span><span className="chip neutral">{itemType}</span>{linkedArea&&<span className="chip boardArea">{linkedArea.split(' — ').at(-1)}</span>}{item.optional&&<span className="chip neutral">Optional</span>}{item.skipped&&<span className="chip skippedChip">Skipped for now</span>}{hoursCheck&&<span className={`itineraryHoursBadge check-${hoursCheck.status}`}>{hoursCheck.label}</span>}</div>
     <div className="muted small">{item.time}{item.destination?` · ${item.destination}`:''}{` · ${inferredDuration} min`}</div>
     {item.details&&<p className="muted small">{item.details}</p>}
     {hoursCheck&&hoursCheck.status!=='open'&&<div className={`itineraryHoursNotice check-${hoursCheck.status}`}><div><strong>{hoursCheck.place.name}</strong><p>{hoursCheck.message}</p></div><button className="textButton" onClick={()=>onShowPlace(hoursCheck.place)}>Review place</button></div>}
@@ -934,7 +942,7 @@ function ItineraryEditor({item,dayIndex,itemIndex,days,places,hoursCheck,onEdit,
     <label className="small">Key Info<textarea className="field" rows={3} value={item.keyInfo??item.confirmationNumber??''} onChange={event=>onEdit(dayIndex,itemIndex,'keyInfo',event.target.value)} onBlur={save}/></label>
     <label className="small">Notes<textarea className="field" rows={3} value={item.userNotes??''} onChange={event=>onEdit(dayIndex,itemIndex,'userNotes',event.target.value)} onBlur={save}/></label>
    </div>
-   <div className="editorToggles"><label className="toggleLine"><input type="checkbox" checked={Boolean(item.optional)} onChange={event=>{onEdit(dayIndex,itemIndex,'optional',event.target.checked);save();}}/> Optional stop</label><label className="toggleLine"><input type="checkbox" checked={Boolean(item.locationNotNeeded)} onChange={event=>{onEdit(dayIndex,itemIndex,'locationNotNeeded',event.target.checked);save();}}/> Route location not needed</label></div>
+   <div className="editorToggles"><label className="toggleLine"><input type="checkbox" checked={Boolean(item.optional)} onChange={event=>{onEdit(dayIndex,itemIndex,'optional',event.target.checked);save();}}/> Optional stop</label><label className="toggleLine"><input type="checkbox" checked={Boolean(item.skipped)} onChange={event=>{onEdit(dayIndex,itemIndex,'skipped',event.target.checked);save();}}/> Skipped for now</label><label className="toggleLine"><input type="checkbox" checked={Boolean(item.locationNotNeeded)} onChange={event=>{onEdit(dayIndex,itemIndex,'locationNotNeeded',event.target.checked);save();}}/> Route location not needed</label></div>
    <div className="editorFooter">
     <div className="placeActions">
      <button className="btn" disabled={itemIndex===0} onClick={()=>onReorder(dayIndex,itemIndex,-1)}>↑ Move up</button>
@@ -953,7 +961,7 @@ function ItineraryEditor({item,dayIndex,itemIndex,days,places,hoursCheck,onEdit,
 function ItineraryDetails({item,places,dayIndex,itemIndex,hoursCheck,onEdit,onSave,onShowPlace}:{item:ItineraryItem;places:Place[];dayIndex:number;itemIndex:number;hoursCheck?:ItineraryHoursCheck;onEdit:(di:number,ii:number,key:EditableKey,value:EditableValue)=>void;onSave:()=>void;onShowPlace:(place:Place)=>void}){
  const keyInfo=item.keyInfo??item.confirmationNumber??'';
  const linkedArea=placeArea(locationResolution(item,places).place);
- return <div className="timelineCopy"><div className="titleRow"><h3>{item.title}</h3>{linkedArea&&<span className="chip boardArea">{linkedArea.split(' — ').at(-1)}</span>}{item.optional&&<span className="chip neutral">Optional</span>}{hoursCheck&&<span className={`itineraryHoursBadge check-${hoursCheck.status}`}>{hoursCheck.label}</span>}</div>{item.details&&<p className="muted small">{item.details}</p>}{hoursCheck&&hoursCheck.status!=='open'&&<div className={`itineraryHoursNotice compact check-${hoursCheck.status}`}><div><strong>{hoursCheck.place.name}</strong><p>{hoursCheck.message}</p></div><button className="textButton" onClick={()=>onShowPlace(hoursCheck.place)}>Review</button></div>}<details style={{marginTop:'10px'}}><summary className="textLink" style={{cursor:'pointer'}}>Trip details</summary><div style={{paddingTop:'10px'}}>{item.routeText&&<p className="muted small">🚌 {item.routeText}</p>}{item.mapUrl&&<a className="textLink" href={item.mapUrl} target="_blank" rel="noreferrer">Transit from current location ↗</a>}<div className="filterGrid" style={{marginTop:'12px'}}><label className="small">Key Info<textarea className="field" rows={3} value={keyInfo} placeholder="Confirmation, seat, terminal, ticket details…" onChange={e=>onEdit(dayIndex,itemIndex,'keyInfo',e.target.value)} onBlur={onSave}/></label><label className="small">Notes<textarea className="field" rows={3} value={item.userNotes??''} placeholder="Add reminders or details" onChange={e=>onEdit(dayIndex,itemIndex,'userNotes',e.target.value)} onBlur={onSave}/></label></div></div></details></div>;
+ return <div className="timelineCopy"><div className="titleRow"><h3>{item.title}</h3>{linkedArea&&<span className="chip boardArea">{linkedArea.split(' — ').at(-1)}</span>}{item.optional&&<span className="chip neutral">Optional</span>}{item.skipped&&<span className="chip skippedChip">Skipped for now</span>}{hoursCheck&&<span className={`itineraryHoursBadge check-${hoursCheck.status}`}>{hoursCheck.label}</span>}</div>{item.details&&<p className="muted small">{item.details}</p>}{hoursCheck&&hoursCheck.status!=='open'&&<div className={`itineraryHoursNotice compact check-${hoursCheck.status}`}><div><strong>{hoursCheck.place.name}</strong><p>{hoursCheck.message}</p></div><button className="textButton" onClick={()=>onShowPlace(hoursCheck.place)}>Review</button></div>}<details style={{marginTop:'10px'}}><summary className="textLink" style={{cursor:'pointer'}}>Trip details</summary><div style={{paddingTop:'10px'}}>{item.routeText&&<p className="muted small">🚌 {item.routeText}</p>}{item.mapUrl&&<a className="textLink" href={item.mapUrl} target="_blank" rel="noreferrer">Transit from current location ↗</a>}<div className="filterGrid" style={{marginTop:'12px'}}><label className="small">Key Info<textarea className="field" rows={3} value={keyInfo} placeholder="Confirmation, seat, terminal, ticket details…" onChange={e=>onEdit(dayIndex,itemIndex,'keyInfo',e.target.value)} onBlur={onSave}/></label><label className="small">Notes<textarea className="field" rows={3} value={item.userNotes??''} placeholder="Add reminders or details" onChange={e=>onEdit(dayIndex,itemIndex,'userNotes',e.target.value)} onBlur={onSave}/></label></div></div></details></div>;
 }
 
 function formatClock(value:Date){
@@ -970,12 +978,28 @@ function statusLabel(status:AssistantState['status']){
  return 'Plenty of flexibility';
 }
 
-function AssistantView({assistant,tripState,now,liveLocation,locationStatus,locationMessage,onRequestLocation,onStopLocation,onComplete,onVisited,onShowPlaces,onExploreNearby}:{assistant:AssistantState;tripState:TripState;now:Date;liveLocation:AssistantLocation|null;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onComplete:(item:ItineraryItem)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void;onExploreNearby:()=>void}){
+type AssistantSuggestionMode='all'|'food'|'indoor';
+
+function matchesAssistantMode(place:Place,mode:AssistantSuggestionMode){
+ if(mode==='all')return true;
+ const text=`${place.name} ${place.category} ${place.tags.join(' ')}`.toLowerCase();
+ if(mode==='food')return /restaurant|food|bakery|coffee|cafe|dessert|candy|bar|market|diner|pizza|taco/.test(text);
+ return /museum|gallery|aquarium|library|market|shop|mall|theatre|theater|escape|restaurant|food|bakery|cafe|coffee|store|hall of fame/.test(text);
+}
+
+function AssistantView({assistant,tripState,now,liveLocation,locationStatus,locationMessage,onRequestLocation,onStopLocation,onComplete,onSkip,onAddToToday,onVisited,onShowPlaces,onExploreNearby}:{assistant:AssistantState;tripState:TripState;now:Date;liveLocation:AssistantLocation|null;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onComplete:(item:ItineraryItem)=>void;onSkip:(item:ItineraryItem)=>void;onAddToToday:(place:Place)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void;onExploreNearby:()=>void}){
  const [extraMinutes,setExtraMinutes]=useState<number|null>(null);
+ const [suggestionMode,setSuggestionMode]=useState<AssistantSuggestionMode>('all');
+ const [addedPlaces,setAddedPlaces]=useState<Set<string>>(()=>new Set());
  const actionItem=assistant.currentActivity??assistant.nextReservation??assistant.nextItem;
  const fixedItem=assistant.nextReservation;
- const extraSuggestions=useMemo(()=>assistant.currentDay&&extraMinutes?findSuggestionCandidates(tripState,assistant.currentDay,extraMinutes,6,{anchor:assistant.suggestionAnchor,location:liveLocation??undefined,now}):[],[assistant.currentDay,assistant.suggestionAnchor,extraMinutes,liveLocation,now,tripState]);
- const displayedSuggestions:SuggestedPlace[]=extraMinutes?extraSuggestions:assistant.suggestions;
+ const suggestionMinutes=extraMinutes??Math.max(assistant.availableMinutes,60);
+ const customSuggestions=useMemo(()=>assistant.currentDay&&(extraMinutes||suggestionMode!=='all')?findSuggestionCandidates(tripState,assistant.currentDay,suggestionMinutes,60,{anchor:assistant.suggestionAnchor,location:liveLocation??undefined,now}).filter(suggestion=>matchesAssistantMode(suggestion.place,suggestionMode)).slice(0,6):[],[assistant.currentDay,assistant.suggestionAnchor,extraMinutes,liveLocation,now,suggestionMinutes,suggestionMode,tripState]);
+ const displayedSuggestions:SuggestedPlace[]=extraMinutes||suggestionMode!=='all'?customSuggestions:assistant.suggestions;
+ function addSuggestion(place:Place){
+  onAddToToday(place);
+  setAddedPlaces(current=>new Set(current).add(place.id));
+ }
  return <section className="assistantPage">
   <div className={`card assistantHero assistant-${assistant.status}`}>
    <div className="assistantStatus"><span className="assistantPulse"/>{statusLabel(assistant.status)}</div>
@@ -994,6 +1018,10 @@ function AssistantView({assistant,tripState,now,liveLocation,locationStatus,loca
      {[30,60,90,120].map(minutes=><button className={extraMinutes===minutes?'active':''} key={minutes} onClick={()=>setExtraMinutes(minutes)}>{minutes<120?`${minutes} min`:'2 hours'}</button>)}
     </div>}
    </div>
+   <div className="assistantQuickFilters" aria-label="Suggestion type">
+    <span>What sounds useful?</span>
+    <div className="timeChoices">{([['all','Any idea'],['food','Find food'],['indoor','Something indoors']] as [AssistantSuggestionMode,string][]).map(([mode,label])=><button className={suggestionMode===mode?'active':''} key={mode} onClick={()=>setSuggestionMode(mode)}>{label}</button>)}</div>
+   </div>
   </div>
 
   {actionItem&&<div className="card assistantAction">
@@ -1008,6 +1036,7 @@ function AssistantView({assistant,tripState,now,liveLocation,locationStatus,loca
    <div className="assistantButtons">
     {!actionItem.locationNotNeeded&&actionItem.mapUrl&&<a className="btn primary" href={actionItem.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}
     {!actionItem.done&&<button className="btn" onClick={()=>onComplete(actionItem)}>Mark complete</button>}
+    {!actionItem.done&&!isFixedItem(actionItem)&&<button className="textButton" onClick={()=>onSkip(actionItem)}>Skip this idea for now</button>}
    </div>
   </div>}
 
@@ -1017,7 +1046,7 @@ function AssistantView({assistant,tripState,now,liveLocation,locationStatus,loca
   </div>}
 
   {displayedSuggestions.length>0&&<section>
-   <div className="pageIntro assistantIntro"><div><div className="eyebrow">{extraMinutes?'EXTRA-TIME IDEAS':'GREAT OPTIONS RIGHT NOW'}</div><h2>{extraMinutes?`Good options for about ${extraMinutes} minutes`:'Options that fit your available time'}</h2><p className="muted">These are varied options from your saved places, not obligations. Pick whatever sounds good.</p></div><span className="chip">About {extraMinutes??assistant.availableMinutes} min free</span></div>
+   <div className="pageIntro assistantIntro"><div><div className="eyebrow">{extraMinutes?'EXTRA-TIME IDEAS':'GREAT OPTIONS RIGHT NOW'}</div><h2>{extraMinutes?`Good options for about ${extraMinutes} minutes`:suggestionMode==='food'?'Food options that fit right now':suggestionMode==='indoor'?'Indoor options that fit right now':'Options that fit your available time'}</h2><p className="muted">These are possibilities, not obligations. Your next fixed commitment remains the timing guardrail.</p></div><span className="chip">About {suggestionMinutes} min free</span></div>
    <div className="grid assistantGrid">{displayedSuggestions.map(suggestion=>{const open=placeOpenStatus(suggestion.place,now);const directions=mapsUrl(suggestion.place.formattedAddress||suggestion.place.name);return <article className="card suggestionCard" key={suggestion.place.id}>
     <div className="between"><span className={`priority priority-${suggestion.place.priority}`}>{suggestion.place.priority==='must'?'Must do':suggestion.place.priority}</span><span className={`hoursStatus hours-${open.status==='ignored'?'unknown':open.status}`}>{open.status==='open'?'Open now':open.status==='ignored'?'Hours not needed':'Hours unknown'}</span></div>
     <h3>{suggestion.place.name}</h3>
@@ -1025,11 +1054,11 @@ function AssistantView({assistant,tripState,now,liveLocation,locationStatus,loca
     <p className="nearbyFacts"><strong>{suggestion.estimatedDuration} min visit</strong>{suggestion.distanceKm!==undefined&&<span>{suggestion.distanceKm<1?`${Math.max(50,Math.round(suggestion.distanceKm*1000/50)*50)} m away`:`${suggestion.distanceKm.toFixed(1)} km away`}</span>}{suggestion.walkingMinutes!==undefined&&<span>≈ {suggestion.walkingMinutes} min walk</span>}</p>
     {suggestion.place.notes&&<p>{suggestion.place.notes}</p>}
     <div className="whyBox"><strong>Why this fits</strong><ul>{suggestion.reasons.slice(0,4).map(reason=><li key={reason}>{reason}</li>)}</ul></div>
-    <div className="placeActions"><a className="btn primary" href={directions} target="_blank" rel="noreferrer">Transit directions</a><button className="btn" onClick={()=>onShowPlaces(suggestion.place)}>View details</button><button className="textButton" onClick={()=>onVisited(suggestion.place.id)}>Mark visited</button></div>
+    <div className="placeActions"><a className="btn" href={directions} target="_blank" rel="noreferrer">Transit directions</a><button className="btn primary" disabled={addedPlaces.has(suggestion.place.id)} onClick={()=>addSuggestion(suggestion.place)}>{addedPlaces.has(suggestion.place.id)?'✓ Added to today':'Add to today'}</button><button className="btn" onClick={()=>onShowPlaces(suggestion.place)}>View details</button><button className="textButton" onClick={()=>onVisited(suggestion.place.id)}>Mark visited</button></div>
    </article>;})}</div>
   </section>}
 
-  {extraMinutes&&displayedSuggestions.length===0&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">✦</div><h2>No saved places fit that window yet.</h2><p className="muted">Try a longer time window or browse all saved places.</p></div>}
+  {(extraMinutes||suggestionMode!=='all')&&displayedSuggestions.length===0&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">✦</div><h2>No saved places fit those choices yet.</h2><p className="muted">Try a longer time window, choose “Any idea,” or browse all saved places.</p></div>}
   {!extraMinutes&&assistant.suggestions.length===0&&!actionItem&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">✦</div><h2>Nothing you need to do right now.</h2><p className="muted">Enjoy the open time. Your itinerary and saved places are still available whenever you want them.</p></div>}
  </section>;
 }
