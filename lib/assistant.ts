@@ -138,7 +138,7 @@ function placeHasCoordinates(place?:Place):place is Place&{latitude:number;longi
 }
 
 function placeForItem(state:TripState,item?:ItineraryItem){
- if(!item)return undefined;
+ if(!item||item.locationNotNeeded)return undefined;
  if(item.placeId){
   const linked=state.places.find(place=>place.id===item.placeId);
   if(linked)return linked;
@@ -326,7 +326,9 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
   const openStatus=placeOpenStatus(place,context.now);
   if(openStatus.status==='closed')return {score:-1000,reasons:['Closed at this time'],duration};
   if(openStatus.status==='open'&&openStatus.minutesUntilClose<duration)return {score:-1000,reasons:['Closes too soon for the estimated visit'],duration};
-  if(openStatus.status==='open'){score+=12;reasons.push('Open during this window');}
+  if(openStatus.status==='open'){score+=16;reasons.push('Open now and long enough for this visit');}
+  else if(openStatus.status==='unknown'){score-=6;reasons.push('Hours are not saved yet — check before going');}
+  else if(openStatus.status==='ignored')reasons.push('No opening-hours check needed');
  }
  if(place.priority==='must'){score+=40;reasons.push('One of your Must Do places');}
  else if(place.priority==='possible'){score+=20;reasons.push('A saved option you were considering');}
@@ -338,7 +340,9 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
  const placeArea=place.area??suggestPlaceArea(place);
  if(anchorArea&&placeArea===anchorArea){
   score+=18;
-  reasons.push(`In the selected area: ${placeArea}`);
+  reasons.push(`In the same neighborhood: ${placeArea}`);
+ }else if(anchorArea&&placeArea){
+  score-=8;
  }
  const distanceKm=anchorLocation&&placeHasCoordinates(place)?distanceBetweenCoordinates(anchorLocation,place):undefined;
  const walkingMinutes=distanceKm!==undefined?approximateWalkingMinutes(distanceKm):undefined;
@@ -349,6 +353,8 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
   else if(distanceKm<=4)score+=5;
   else if(distanceKm>8)score-=30;
   reasons.push(`${distanceLabel(distanceKm)} from ${anchorLocation?.label}${walkingMinutes!==undefined?` · about ${walkingMinutes} min walking`:''}`);
+ }else if(context.location){
+  score-=10;
  }
  if(context.anchor){
   const anchorTokens=meaningfulTokens(`${context.anchor.title} ${context.anchor.destination??''} ${context.anchor.details??''}`);

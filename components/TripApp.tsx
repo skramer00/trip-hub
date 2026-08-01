@@ -1006,7 +1006,7 @@ function AssistantView({assistant,tripState,now,liveLocation,locationStatus,loca
     {(actionItem.keyInfo||actionItem.confirmationNumber)&&<div className="keyInfo"><strong>Key Info</strong><p>{actionItem.keyInfo??actionItem.confirmationNumber}</p></div>}
    </div>
    <div className="assistantButtons">
-    {actionItem.mapUrl&&<a className="btn primary" href={actionItem.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}
+    {!actionItem.locationNotNeeded&&actionItem.mapUrl&&<a className="btn primary" href={actionItem.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}
     {!actionItem.done&&<button className="btn" onClick={()=>onComplete(actionItem)}>Mark complete</button>}
    </div>
   </div>}
@@ -1018,14 +1018,15 @@ function AssistantView({assistant,tripState,now,liveLocation,locationStatus,loca
 
   {displayedSuggestions.length>0&&<section>
    <div className="pageIntro assistantIntro"><div><div className="eyebrow">{extraMinutes?'EXTRA-TIME IDEAS':'GREAT OPTIONS RIGHT NOW'}</div><h2>{extraMinutes?`Good options for about ${extraMinutes} minutes`:'Options that fit your available time'}</h2><p className="muted">These are varied options from your saved places, not obligations. Pick whatever sounds good.</p></div><span className="chip">About {extraMinutes??assistant.availableMinutes} min free</span></div>
-   <div className="grid assistantGrid">{displayedSuggestions.map(suggestion=><article className="card suggestionCard" key={suggestion.place.id}>
-    <div className="between"><span className={`priority priority-${suggestion.place.priority}`}>{suggestion.place.priority==='must'?'Must do':suggestion.place.priority}</span><span className="duration">{suggestion.estimatedDuration} min</span></div>
+   <div className="grid assistantGrid">{displayedSuggestions.map(suggestion=>{const open=placeOpenStatus(suggestion.place,now);const directions=mapsUrl(suggestion.place.formattedAddress||suggestion.place.name);return <article className="card suggestionCard" key={suggestion.place.id}>
+    <div className="between"><span className={`priority priority-${suggestion.place.priority}`}>{suggestion.place.priority==='must'?'Must do':suggestion.place.priority}</span><span className={`hoursStatus hours-${open.status==='ignored'?'unknown':open.status}`}>{open.status==='open'?'Open now':open.status==='ignored'?'Hours not needed':'Hours unknown'}</span></div>
     <h3>{suggestion.place.name}</h3>
-    <div className="muted small">{suggestion.place.category} · {suggestion.place.area??suggestion.place.region}{suggestion.distanceKm!==undefined?` · ${suggestion.distanceKm<1?`${Math.max(50,Math.round(suggestion.distanceKm*1000/50)*50)} m`:`${suggestion.distanceKm.toFixed(1)} km`} away`:''}</div>
+    <div className="placeLocationMeta"><span className="chip neutral">{suggestion.place.category}</span>{(suggestion.place.area??suggestPlaceArea(suggestion.place))&&<span className="areaBadge">{(suggestion.place.area??suggestPlaceArea(suggestion.place))!.split(' — ').at(-1)}</span>}</div>
+    <p className="nearbyFacts"><strong>{suggestion.estimatedDuration} min visit</strong>{suggestion.distanceKm!==undefined&&<span>{suggestion.distanceKm<1?`${Math.max(50,Math.round(suggestion.distanceKm*1000/50)*50)} m away`:`${suggestion.distanceKm.toFixed(1)} km away`}</span>}{suggestion.walkingMinutes!==undefined&&<span>≈ {suggestion.walkingMinutes} min walk</span>}</p>
     {suggestion.place.notes&&<p>{suggestion.place.notes}</p>}
-    <div className="whyBox"><strong>Why this fits</strong><ul>{suggestion.reasons.slice(0,3).map(reason=><li key={reason}>{reason}</li>)}</ul></div>
-    <div className="placeActions"><a className="btn primary" href={suggestion.place.mapUrl} target="_blank" rel="noreferrer">Directions</a><button className="btn" onClick={()=>onShowPlaces(suggestion.place)}>View details</button><button className="textButton" onClick={()=>onVisited(suggestion.place.id)}>Mark visited</button></div>
-   </article>)}</div>
+    <div className="whyBox"><strong>Why this fits</strong><ul>{suggestion.reasons.slice(0,4).map(reason=><li key={reason}>{reason}</li>)}</ul></div>
+    <div className="placeActions"><a className="btn primary" href={directions} target="_blank" rel="noreferrer">Transit directions</a><button className="btn" onClick={()=>onShowPlaces(suggestion.place)}>View details</button><button className="textButton" onClick={()=>onVisited(suggestion.place.id)}>Mark visited</button></div>
+   </article>;})}</div>
   </section>}
 
   {extraMinutes&&displayedSuggestions.length===0&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">✦</div><h2>No saved places fit that window yet.</h2><p className="muted">Try a longer time window or browse all saved places.</p></div>}
