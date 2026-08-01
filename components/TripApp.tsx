@@ -24,6 +24,7 @@ const navGroups=[
  {label:'Checklist',tabs:['Checklist'] as Tab[]}
 ] as const;
 type InstallPromptEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
+type AssistantPreview={date:string;time:string;area:string};
 
 type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'userNotes'|'optional'|'skipped'|'fixed'|'type'|'estimatedDuration'|'travelMinutes'|'prepBuffer'|'placeId'|'locationNotNeeded';
 type EditableValue=string|boolean|number|undefined;
@@ -75,6 +76,13 @@ function timeValue(value:string){
 
 function sortItems(items:ItineraryItem[]){return [...items].sort((a,b)=>timeValue(a.time)-timeValue(b.time));}
 function mapsUrl(destination:string){return destination.trim()?`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination.trim())}&travelmode=transit`:'';}
+function previewMoment(preview:AssistantPreview|null,fallback:Date){
+ if(!preview)return fallback;
+ const [year,month,day]=preview.date.split('-').map(Number);
+ const [hour,minute]=preview.time.split(':').map(Number);
+ if(!year||!month||!day||!Number.isFinite(hour)||!Number.isFinite(minute))return fallback;
+ return new Date(year,month-1,day,hour,minute,0,0);
+}
 function itineraryItemRegion(day:TripState['days'][number],item:ItineraryItem){
  const locationText=`${item.title} ${item.destination??''}`.toLowerCase();
  if(/\b(lax|los angeles|california)\b/.test(locationText))return 'Other';
@@ -103,6 +111,7 @@ export default function TripApp(){
  const [liveLocation,setLiveLocation]=useState<AssistantLocation|null>(null);
  const [locationStatus,setLocationStatus]=useState<'idle'|'requesting'|'active'|'error'>('idle');
  const [locationMessage,setLocationMessage]=useState('');
+ const [assistantPreview,setAssistantPreview]=useState<AssistantPreview|null>(null);
 
  useEffect(()=>{
   let active=true;
@@ -491,7 +500,9 @@ export default function TripApp(){
  const suggestibleAreaCount=state?.places.filter(place=>!place.area&&Boolean(suggestPlaceArea(place))).length??0;
  const filtered=useMemo(()=>{if(!state)return[];const needle=query.trim().toLowerCase();return state.places.filter(place=>(region==='All'||place.region===region)&&(area==='All'||(area==='Unassigned'?!place.area:place.area===area))&&(category==='All'||place.category===category)&&(priority==='All'||place.priority===priority)&&(showVisited||!place.visited)&&(!needle||`${place.name} ${place.area??''} ${place.notes} ${place.tags.join(' ')}`.toLowerCase().includes(needle)));},[state,query,region,area,category,priority,showVisited]);
  const nearbySuggestions=useMemo(()=>{if(!state||!currentDay)return[];const rank={must:0,possible:1,backup:2};return state.places.filter(place=>placeMatchesDay(place,currentDay.city,currentDay.date)&&!place.visited).sort((a,b)=>rank[a.priority]-rank[b.priority]).slice(0,6);},[state,currentDay]);
- const assistant=useMemo(()=>state?buildAssistantState(state,now,liveLocation??undefined):null,[state,now,liveLocation]);
+ const assistantNow=useMemo(()=>previewMoment(assistantPreview,now),[assistantPreview,now]);
+ const assistantLocation=assistantPreview?.area?undefined:liveLocation??undefined;
+ const assistant=useMemo(()=>state?buildAssistantState(state,assistantNow,assistantLocation,assistantPreview?.area||undefined,Boolean(assistantPreview)):null,[assistantLocation,assistantNow,assistantPreview,state]);
  const reservations=useMemo(()=>state?state.days.flatMap(day=>day.items.flatMap(item=>isFixedItem(item)?[{day,item}]:[])):[],[state]);
  const readiness=useMemo(()=>state?buildTripReadiness(state):null,[state]);
  const activeNavGroup=navGroups.find(group=>group.tabs.includes(tab))??navGroups[0];
@@ -519,7 +530,7 @@ export default function TripApp(){
     <div className="between sectionHeading"><h2 className="sectionTitle">Recommended for this day</h2><button className="textButton" onClick={()=>{setRegion(currentDay.city.includes('Toronto')?'Toronto':'Niagara & Buffalo');setArea('All');setTab('Places');}}>See all</button></div>
     <div className="grid compactGrid">{nearbySuggestions.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>
    </section>}
-   {tab==='Assistant'&&assistant&&<AssistantView assistant={assistant} tripState={state} now={now} liveLocation={liveLocation} locationStatus={locationStatus} locationMessage={locationMessage} onRequestLocation={requestLocation} onStopLocation={stopUsingLocation} onComplete={item=>{
+   {tab==='Assistant'&&assistant&&<AssistantView assistant={assistant} tripState={state} now={assistantNow} liveLocation={assistantPreview?.area?null:liveLocation} preview={assistantPreview} onPreviewChange={setAssistantPreview} locationStatus={locationStatus} locationMessage={locationMessage} onRequestLocation={requestLocation} onStopLocation={stopUsingLocation} onComplete={item=>{
     const day=state.days[assistant.currentDayIndex];
     const itemIndex=day?.items.findIndex(candidate=>candidate.id===item.id)??-1;
     if(itemIndex>=0)toggleDay(assistant.currentDayIndex,itemIndex);
@@ -987,20 +998,33 @@ function matchesAssistantMode(place:Place,mode:AssistantSuggestionMode){
  return /museum|gallery|aquarium|library|market|shop|mall|theatre|theater|escape|restaurant|food|bakery|cafe|coffee|store|hall of fame/.test(text);
 }
 
-function AssistantView({assistant,tripState,now,liveLocation,locationStatus,locationMessage,onRequestLocation,onStopLocation,onComplete,onSkip,onAddToToday,onVisited,onShowPlaces,onExploreNearby}:{assistant:AssistantState;tripState:TripState;now:Date;liveLocation:AssistantLocation|null;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onComplete:(item:ItineraryItem)=>void;onSkip:(item:ItineraryItem)=>void;onAddToToday:(place:Place)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void;onExploreNearby:()=>void}){
+function AssistantView({assistant,tripState,now,liveLocation,preview,onPreviewChange,locationStatus,locationMessage,onRequestLocation,onStopLocation,onComplete,onSkip,onAddToToday,onVisited,onShowPlaces,onExploreNearby}:{assistant:AssistantState;tripState:TripState;now:Date;liveLocation:AssistantLocation|null;preview:AssistantPreview|null;onPreviewChange:(preview:AssistantPreview|null)=>void;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onComplete:(item:ItineraryItem)=>void;onSkip:(item:ItineraryItem)=>void;onAddToToday:(place:Place)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void;onExploreNearby:()=>void}){
  const [extraMinutes,setExtraMinutes]=useState<number|null>(null);
  const [suggestionMode,setSuggestionMode]=useState<AssistantSuggestionMode>('all');
  const [addedPlaces,setAddedPlaces]=useState<Set<string>>(()=>new Set());
+ const previewMode=Boolean(preview);
  const actionItem=assistant.currentActivity??assistant.nextReservation??assistant.nextItem;
  const fixedItem=assistant.nextReservation;
  const suggestionMinutes=extraMinutes??Math.max(assistant.availableMinutes,60);
- const customSuggestions=useMemo(()=>assistant.currentDay&&(extraMinutes||suggestionMode!=='all')?findSuggestionCandidates(tripState,assistant.currentDay,suggestionMinutes,60,{anchor:assistant.suggestionAnchor,location:liveLocation??undefined,now}).filter(suggestion=>matchesAssistantMode(suggestion.place,suggestionMode)).slice(0,6):[],[assistant.currentDay,assistant.suggestionAnchor,extraMinutes,liveLocation,now,suggestionMinutes,suggestionMode,tripState]);
+ const previewDay=tripState.days.find(day=>day.date===(preview?.date??assistant.currentDay?.date));
+ const previewRegion=previewDay?.city.includes('Toronto')?'Toronto':'Niagara & Buffalo';
+ const previewAreas=useMemo(()=>areaOptions(tripState.places.filter(place=>place.region===previewRegion)),[previewRegion,tripState.places]);
+ const customSuggestions=useMemo(()=>assistant.currentDay&&(extraMinutes||suggestionMode!=='all')?findSuggestionCandidates(tripState,assistant.currentDay,suggestionMinutes,60,{anchor:assistant.suggestionAnchor,anchorArea:preview?.area||undefined,location:liveLocation??undefined,now,previewWallClock:previewMode}).filter(suggestion=>matchesAssistantMode(suggestion.place,suggestionMode)).slice(0,6):[],[assistant.currentDay,assistant.suggestionAnchor,extraMinutes,liveLocation,now,preview?.area,previewMode,suggestionMinutes,suggestionMode,tripState]);
  const displayedSuggestions:SuggestedPlace[]=extraMinutes||suggestionMode!=='all'?customSuggestions:assistant.suggestions;
  function addSuggestion(place:Place){
   onAddToToday(place);
   setAddedPlaces(current=>new Set(current).add(place.id));
  }
  return <section className="assistantPage">
+  <div className={`card assistantPreview ${preview?'active':''}`}>
+   <div className="assistantPreviewHeader"><div><div className="eyebrow">ASSISTANT PREVIEW</div><h2>{preview?'Testing a trip moment':'See what the Assistant will suggest'}</h2><p className="muted">Previewing never changes your itinerary, checkmarks, or real-time settings.</p></div>{preview?<button className="btn" onClick={()=>onPreviewChange(null)}>Return to live mode</button>:<button className="btn primary" onClick={()=>onPreviewChange({date:assistant.currentDay?.date??tripState.days[0].date,time:'12:00',area:''})}>Preview a day</button>}</div>
+   {preview&&<div className="assistantPreviewFields">
+    <label>Trip day<select className="field" value={preview.date} onChange={event=>onPreviewChange({...preview,date:event.target.value,area:''})}>{tripState.days.map(day=><option value={day.date} key={day.date}>{day.label} · {day.city}</option>)}</select></label>
+    <label>Time<input className="field" type="time" value={preview.time} onChange={event=>onPreviewChange({...preview,time:event.target.value})}/></label>
+    <label>Starting neighborhood<select className="field" value={preview.area} onChange={event=>onPreviewChange({...preview,area:event.target.value})}><option value="">Use itinerary context</option>{previewAreas.map(areaName=><option value={areaName} key={areaName}>{areaName}</option>)}</select></label>
+   </div>}
+   {preview&&<div className="previewBanner"><span>Previewing</span><strong>{previewDay?.label} at {now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</strong>{preview.area&&<small>Starting around {preview.area}</small>}</div>}
+  </div>
   <div className={`card assistantHero assistant-${assistant.status}`}>
    <div className="assistantStatus"><span className="assistantPulse"/>{statusLabel(assistant.status)}</div>
    <div className="eyebrow">{assistant.currentDay?`${assistant.currentDay.label} · ${assistant.currentDay.city}`:'SMART TRIP ASSISTANT'}</div>
@@ -1035,8 +1059,9 @@ function AssistantView({assistant,tripState,now,liveLocation,locationStatus,loca
    </div>
    <div className="assistantButtons">
     {!actionItem.locationNotNeeded&&actionItem.mapUrl&&<a className="btn primary" href={actionItem.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}
-    {!actionItem.done&&<button className="btn" onClick={()=>onComplete(actionItem)}>Mark complete</button>}
-    {!actionItem.done&&!isFixedItem(actionItem)&&<button className="textButton" onClick={()=>onSkip(actionItem)}>Skip this idea for now</button>}
+    {!previewMode&&!actionItem.done&&<button className="btn" onClick={()=>onComplete(actionItem)}>Mark complete</button>}
+    {!previewMode&&!actionItem.done&&!isFixedItem(actionItem)&&<button className="textButton" onClick={()=>onSkip(actionItem)}>Skip this idea for now</button>}
+    {previewMode&&<span className="muted small previewOnly">Preview only · no trip changes</span>}
    </div>
   </div>}
 
@@ -1047,14 +1072,14 @@ function AssistantView({assistant,tripState,now,liveLocation,locationStatus,loca
 
   {displayedSuggestions.length>0&&<section>
    <div className="pageIntro assistantIntro"><div><div className="eyebrow">{extraMinutes?'EXTRA-TIME IDEAS':'GREAT OPTIONS RIGHT NOW'}</div><h2>{extraMinutes?`Good options for about ${extraMinutes} minutes`:suggestionMode==='food'?'Food options that fit right now':suggestionMode==='indoor'?'Indoor options that fit right now':'Options that fit your available time'}</h2><p className="muted">These are possibilities, not obligations. Your next fixed commitment remains the timing guardrail.</p></div><span className="chip">About {suggestionMinutes} min free</span></div>
-   <div className="grid assistantGrid">{displayedSuggestions.map(suggestion=>{const open=placeOpenStatus(suggestion.place,now);const directions=mapsUrl(suggestion.place.formattedAddress||suggestion.place.name);return <article className="card suggestionCard" key={suggestion.place.id}>
+   <div className="grid assistantGrid">{displayedSuggestions.map(suggestion=>{const open=placeOpenStatus(suggestion.place,now,previewMode);const directions=mapsUrl(suggestion.place.formattedAddress||suggestion.place.name);return <article className="card suggestionCard" key={suggestion.place.id}>
     <div className="between"><span className={`priority priority-${suggestion.place.priority}`}>{suggestion.place.priority==='must'?'Must do':suggestion.place.priority}</span><span className={`hoursStatus hours-${open.status==='ignored'?'unknown':open.status}`}>{open.status==='open'?'Open now':open.status==='ignored'?'Hours not needed':'Hours unknown'}</span></div>
     <h3>{suggestion.place.name}</h3>
     <div className="placeLocationMeta"><span className="chip neutral">{suggestion.place.category}</span>{(suggestion.place.area??suggestPlaceArea(suggestion.place))&&<span className="areaBadge">{(suggestion.place.area??suggestPlaceArea(suggestion.place))!.split(' — ').at(-1)}</span>}</div>
     <p className="nearbyFacts"><strong>{suggestion.estimatedDuration} min visit</strong>{suggestion.distanceKm!==undefined&&<span>{suggestion.distanceKm<1?`${Math.max(50,Math.round(suggestion.distanceKm*1000/50)*50)} m away`:`${suggestion.distanceKm.toFixed(1)} km away`}</span>}{suggestion.walkingMinutes!==undefined&&<span>≈ {suggestion.walkingMinutes} min walk</span>}</p>
     {suggestion.place.notes&&<p>{suggestion.place.notes}</p>}
     <div className="whyBox"><strong>Why this fits</strong><ul>{suggestion.reasons.slice(0,4).map(reason=><li key={reason}>{reason}</li>)}</ul></div>
-    <div className="placeActions"><a className="btn" href={directions} target="_blank" rel="noreferrer">Transit directions</a><button className="btn primary" disabled={addedPlaces.has(suggestion.place.id)} onClick={()=>addSuggestion(suggestion.place)}>{addedPlaces.has(suggestion.place.id)?'✓ Added to today':'Add to today'}</button><button className="btn" onClick={()=>onShowPlaces(suggestion.place)}>View details</button><button className="textButton" onClick={()=>onVisited(suggestion.place.id)}>Mark visited</button></div>
+    <div className="placeActions"><a className="btn" href={directions} target="_blank" rel="noreferrer">Transit directions</a>{previewMode?<button className="btn primary" disabled>Preview only</button>:<button className="btn primary" disabled={addedPlaces.has(suggestion.place.id)} onClick={()=>addSuggestion(suggestion.place)}>{addedPlaces.has(suggestion.place.id)?'✓ Added to today':'Add to today'}</button>}<button className="btn" onClick={()=>onShowPlaces(suggestion.place)}>View details</button>{!previewMode&&<button className="textButton" onClick={()=>onVisited(suggestion.place.id)}>Mark visited</button>}</div>
    </article>;})}</div>
   </section>}
 

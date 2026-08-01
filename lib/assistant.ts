@@ -29,6 +29,7 @@ export type SuggestionContext={
  anchorArea?:string;
  location?:AssistantLocation;
  now?:Date;
+ previewWallClock?:boolean;
 };
 
 export type NearbyFilters={
@@ -236,11 +237,11 @@ function clockMinutes(value:string){
  return Number(match[1])*60+Number(match[2]);
 }
 
-export function placeOpenStatus(place:Place,now:Date){
+export function placeOpenStatus(place:Place,now:Date,useLocalClock=false){
  if(place.ignoreHours)return {status:'ignored' as const};
  let weekday=WEEKDAYS[now.getDay()];
  let current=now.getHours()*60+now.getMinutes();
- try{
+ if(!useLocalClock)try{
   const parts=new Intl.DateTimeFormat('en-US',{timeZone:place.hoursTimeZone??'America/Toronto',weekday:'long',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(now);
   const weekdayName=parts.find(part=>part.type==='weekday')?.value.toLowerCase() as Weekday|undefined;
   const hour=Number(parts.find(part=>part.type==='hour')?.value);
@@ -323,7 +324,7 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
  let score=0;
  if(place.visited)return {score:-1000,reasons,duration};
  if(context.now){
-  const openStatus=placeOpenStatus(place,context.now);
+  const openStatus=placeOpenStatus(place,context.now,context.previewWallClock);
   if(openStatus.status==='closed')return {score:-1000,reasons:['Closed at this time'],duration};
   if(openStatus.status==='open'&&openStatus.minutesUntilClose<duration)return {score:-1000,reasons:['Closes too soon for the estimated visit'],duration};
   if(openStatus.status==='open'){score+=16;reasons.push('Open now and long enough for this visit');}
@@ -493,7 +494,7 @@ function buildPresentation(args:{
  return {status,headline,subheadline,notices};
 }
 
-export function buildAssistantState(state:TripState,now=new Date(),location?:AssistantLocation):AssistantState{
+export function buildAssistantState(state:TripState,now=new Date(),location?:AssistantLocation,anchorArea?:string,previewWallClock=false):AssistantState{
  if(!state.days.length){return {currentDayIndex:0,availableMinutes:0,status:'finished',headline:'No itinerary yet.',subheadline:'Add a day to begin using the trip assistant.',suggestions:[],notices:[],allRemainingFlexible:true};}
  const found=findCurrentDay(state,now);
  const day=found.day;
@@ -509,7 +510,7 @@ export function buildAssistantState(state:TripState,now=new Date(),location?:Ass
  const allRemainingFlexible=remaining.length>0&&remaining.every(item=>!isFixedItem(item));
  const presentation=buildPresentation({now,day,current,next,reservation,leaveBy,availableMinutes,allRemainingFlexible});
  const suggestionAnchor=current?.item??previous?.item??next?.item;
- const suggestions=(presentation.status==='explore'||presentation.status==='relax')&&availableMinutes>=30?findSuggestionCandidates(state,day,availableMinutes,3,{anchor:suggestionAnchor,location,now}):[];
+ const suggestions=(presentation.status==='explore'||presentation.status==='relax')&&availableMinutes>=30?findSuggestionCandidates(state,day,availableMinutes,3,{anchor:suggestionAnchor,anchorArea,location,now,previewWallClock}):[];
  return {
   currentDay:day,
   currentDayIndex:found.index,
