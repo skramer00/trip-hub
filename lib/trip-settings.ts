@@ -1,17 +1,20 @@
 import type {TripCoverTheme,TripSettings} from './types';
 
 export const defaultTripSettings:TripSettings={
+ version:2,
  title:'Toronto · Niagara · Buffalo',
  destinations:'Toronto, Niagara Falls & Buffalo',
  startDate:'2026-09-24',
  endDate:'2026-10-01',
  publicMessage:'Follow along as we explore Toronto, Niagara Falls, and Buffalo—with a Bills game in the middle.',
  coverTheme:'forest',
- publicSections:['today','recap','explore','food']
+ publicSections:['overview','today','recap','explore','food']
 };
 
 export function resolvedTripSettings(settings?:Partial<TripSettings>):TripSettings{
- return {...defaultTripSettings,...settings,publicSections:settings?.publicSections?.length?settings.publicSections:defaultTripSettings.publicSections};
+ const savedSections=settings?.publicSections?.length?settings.publicSections:defaultTripSettings.publicSections;
+ const publicSections=settings&&Number(settings.version??0)<2&&!savedSections.includes('overview')?['overview' as const,...savedSections]:savedSections;
+ return {...defaultTripSettings,...settings,version:2,publicSections};
 }
 
 function dateAtNoon(value:string){const [year,month,day]=value.split('-').map(Number);return new Date(year,month-1,day,12);}

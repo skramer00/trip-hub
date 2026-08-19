@@ -24,10 +24,10 @@ import {resolvedTripSettings,tripDateLabel} from '@/lib/trip-settings';
 import type {WeatherResponse} from '@/lib/weather';
 import DietaryReview from '@/components/DietaryReview';
 
-const tabs=['Today','Assistant','Journal','Nearby','Board','Itinerary','Locations','Reservations','Settings','Food','Dietary','Places','Hours','Checklist'] as const;
+const tabs=['Overview','Today','Assistant','Journal','Nearby','Board','Itinerary','Locations','Reservations','Settings','Food','Dietary','Places','Hours','Checklist'] as const;
 type Tab=(typeof tabs)[number];
 const navGroups=[
- {label:'Today',tabs:['Today','Assistant','Journal'] as Tab[]},
+ {label:'Today',tabs:['Overview','Today','Assistant','Journal'] as Tab[]},
  {label:'Plan',tabs:['Board','Itinerary','Locations','Reservations','Settings'] as Tab[]},
  {label:'Explore',tabs:['Nearby','Places','Hours'] as Tab[]},
  {label:'Food',tabs:['Food','Dietary'] as Tab[]},
@@ -35,11 +35,12 @@ const navGroups=[
 ] as const;
 function publicNavGroups(sections:PublicTripSection[]){
  const groups:{label:string;tabs:Tab[]}[]=[];
- if(sections.includes('today')||sections.includes('recap'))groups.push({label:'Trip',tabs:[...(sections.includes('today')?['Today','Assistant'] as Tab[]:[]),...(sections.includes('recap')?['Journal'] as Tab[]:[])]});
+ if(sections.includes('overview')||sections.includes('today')||sections.includes('recap'))groups.push({label:'Trip',tabs:[...(sections.includes('overview')?['Overview'] as Tab[]:[]),...(sections.includes('today')?['Today','Assistant'] as Tab[]:[]),...(sections.includes('recap')?['Journal'] as Tab[]:[])]});
  if(sections.includes('explore'))groups.push({label:'Explore',tabs:['Nearby','Places']});
  if(sections.includes('food'))groups.push({label:'Food',tabs:['Food']});
  return groups.length?groups:[{label:'Trip',tabs:['Today'] as Tab[]}];
 }
+function publicLandingTab(state:TripState){return publicNavGroups(resolvedTripSettings(state.settings).publicSections)[0].tabs[0];}
 type InstallPromptEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
 type AssistantPreview={date:string;time:string;area:string};
 
@@ -160,6 +161,7 @@ export default function TripApp(){
    setAuthReady(true);
    setPendingSync(editor&&hasPending);
    setState(selected);
+   if(!editor)setTab(publicLandingTab(selected));
    setCloud(Boolean(result.cloud));
    if(editor)localStorage.setItem(localStateKey,JSON.stringify(selected));
    if(editor&&hasPending&&local&&navigator.onLine){
@@ -257,6 +259,7 @@ export default function TripApp(){
   setState(result.state);
   setCloud(Boolean(result.cloud));
   setIsEditor(Boolean(result.editor));
+  if(!result.editor)setTab(publicLandingTab(result.state));
   return result;
  }
  async function unlockEditor(event:FormEvent<HTMLFormElement>){
@@ -299,7 +302,7 @@ export default function TripApp(){
   setState(publicTripState(state));
   setPublicPreview(true);
   setShowSharePanel(false);
-  setTab('Today');
+  setTab(publicLandingTab(state));
  }
  async function exitPublicPreview(){
   setPublicPreview(false);
@@ -733,6 +736,7 @@ export default function TripApp(){
    {!editorView&&tripSettings.publicMessage&&<section className="card publicWelcome"><div className="eyebrow">WELCOME TO OUR TRIP</div><p>{tripSettings.publicMessage}</p></section>}
    <nav className="tabs mainTabs" aria-label="Trip sections">{visibleNavGroups.map(group=><button key={group.label} className={activeNavGroup.label===group.label?'active':''} onClick={()=>setTab(group.tabs[0])}>{group.label}</button>)}</nav>
    {activeNavGroup.tabs.length>1&&<nav className="subTabs" aria-label={`${activeNavGroup.label} views`}>{activeNavGroup.tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item==='Places'?'Saved Places':item}</button>)}</nav>}
+   {tab==='Overview'&&<TripOverview state={state} settings={tripSettings} canEdit={editorView} onToday={()=>setTab('Today')} onEditDay={()=>setTab('Itinerary')}/>}
    {tab==='Today'&&currentDay&&<section>
    <div className="todayHero card"><div><div className="eyebrow">TODAY</div><h2>{currentDay.label} · {currentDay.city}</h2><p className="muted">Recommendations below are selected for this specific itinerary day.</p></div><div className="progressRing" aria-label={`${completedToday} of ${totalToday} complete`}><strong>{completedToday}/{totalToday}</strong><span>done</span></div></div>
     {editorView&&<MealBalanceCard date={currentDay.date} value={state.mealBalanceByDate?.[currentDay.date]} triedFoods={foodsTriedOnDate(state,currentDay.date)} onChange={updateMealBalance}/>}
@@ -795,7 +799,17 @@ export default function TripApp(){
  </>;
 }
 
+function TripOverview({state,settings,canEdit,onToday,onEditDay}:{state:TripState;settings:TripSettings;canEdit:boolean;onToday:()=>void;onEditDay:(date:string)=>void}){
+ const fixedPlans=state.days.reduce((total,day)=>total+day.items.filter(isFixedItem).length,0);
+ return <section className="overviewPage"><div className="pageIntro overviewIntro"><div><div className="eyebrow">TRIP OVERVIEW</div><h2>The whole journey at a glance</h2><p className="muted">Browse each day, open routes, and expand only the details you need.</p></div><button className="btn primary" onClick={onToday}>Open today’s plan</button></div>
+  <div className="overviewStats"><div><strong>{state.days.length}</strong><span>trip days</span></div><div><strong>{fixedPlans}</strong><span>timed anchors</span></div><div><strong>{state.places.length}</strong><span>saved places</span></div></div>
+  <div className="overviewTimeline">{state.days.map((day,index)=><details className="card overviewDay" key={day.date}><summary><span className="overviewMarker" aria-hidden="true">{index+1}</span><span className="overviewDayTitle"><small>{day.date}</small><strong>{day.label} · {day.city}</strong><em>{day.items.length} plan{day.items.length===1?'':'s'} · {day.items.filter(isFixedItem).length} timed</em></span><span className="overviewChevron" aria-hidden="true">⌄</span></summary><div className="overviewDayBody">{day.items.length?<ol>{day.items.map(item=><li key={item.id}><span className="overviewTime">{item.time}</span><div><div className="overviewItemTitle"><strong>{item.title}</strong>{isFixedItem(item)&&<span className="chip">Timed</span>}{item.optional&&<span className="chip neutral">Optional</span>}</div>{item.details&&<p>{item.details}</p>}{item.mapUrl&&<a className="textLink" href={item.mapUrl} target="_blank" rel="noreferrer">Open route ↗</a>}</div></li>)}</ol>:<p className="muted">This day is open for exploring.</p>}{canEdit&&<button className="btn overviewEdit" onClick={()=>onEditDay(day.date)}>Edit this day</button>}</div></details>)}</div>
+  <div className="card overviewFooter"><div><strong>{settings.destinations}</strong><p className="muted small">{tripDateLabel(settings.startDate,settings.endDate)}</p></div><button className="textButton" onClick={onToday}>Go to the live day view →</button></div>
+ </section>;
+}
+
 const publicSectionOptions:{id:PublicTripSection;label:string;detail:string}[]=[
+ {id:'overview',label:'Trip overview',detail:'Expandable day-by-day public itinerary'},
  {id:'today',label:'Today & Assistant',detail:'Daily plan and calm next-step guidance'},
  {id:'recap',label:'Trip recap',detail:'Public journal moments and trip memories'},
  {id:'explore',label:'Explore',detail:'Nearby ideas and saved public places'},
