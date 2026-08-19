@@ -1,4 +1,4 @@
-const CACHE_NAME='trip-hub-v3';
+const CACHE_NAME='trip-hub-v4';
 const CORE_URLS=['/','/manifest.webmanifest','/icon'];
 
 self.addEventListener('install',event=>{

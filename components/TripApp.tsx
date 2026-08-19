@@ -22,18 +22,19 @@ import {weatherNotice,weatherPackingReminders,weatherPreference} from '@/lib/wea
 import {publicTripState} from '@/lib/public-state';
 import {resolvedTripSettings,tripDateLabel} from '@/lib/trip-settings';
 import {calendarEntryDetails,entryCalendar,fixedCalendarEntries,googleCalendarUrl,restoredTripState,tripBackup,tripCalendar} from '@/lib/trip-export';
+import {validateTripState} from '@/lib/trip-validation';
 import type {WeatherResponse} from '@/lib/weather';
 import DietaryReview from '@/components/DietaryReview';
 
 const tabs=['Overview','Today','Assistant','Journal','Nearby','Board','Itinerary','Locations','Reservations','Settings','Food','Dietary','Places','Hours','Checklist'] as const;
 type Tab=(typeof tabs)[number];
 const navGroups=[
- {label:'Today',tabs:['Overview','Today','Assistant','Journal'] as Tab[]},
+ {label:'Trip',tabs:['Overview','Today','Assistant','Journal'] as Tab[]},
  {label:'Plan',tabs:['Board','Itinerary','Locations','Reservations','Settings'] as Tab[]},
  {label:'Explore',tabs:['Nearby','Places','Hours'] as Tab[]},
- {label:'Food',tabs:['Food','Dietary'] as Tab[]},
- {label:'Checklist',tabs:['Checklist'] as Tab[]}
+ {label:'Lists',tabs:['Food','Dietary','Checklist'] as Tab[]}
 ] as const;
+const tabLabels:Partial<Record<Tab,string>>={Today:'Daily Plan',Assistant:'Trip Assistant',Board:'Trip Board',Itinerary:'Edit Itinerary',Locations:'Location Setup',Settings:'Trip Settings',Places:'Saved Places',Hours:'Business Hours',Food:'Food List',Dietary:'Dietary Review'};
 function publicNavGroups(sections:PublicTripSection[]){
  const groups:{label:string;tabs:Tab[]}[]=[];
  if(sections.includes('overview')||sections.includes('today')||sections.includes('recap'))groups.push({label:'Trip',tabs:[...(sections.includes('overview')?['Overview'] as Tab[]:[]),...(sections.includes('today')?['Today','Assistant'] as Tab[]:[]),...(sections.includes('recap')?['Journal'] as Tab[]:[])]});
@@ -52,6 +53,8 @@ const pendingSyncKey='trip-state-pending-sync';
 const offlineReadyKey='trip-offline-ready-v2';
 const boardHiddenDaysKey='trip-board-hidden-days-v1';
 const editorSessionKey='trip-editor-session-v1';
+const lastSyncKey='trip-last-synced-at-v1';
+const restoreRollbackKey='trip-before-restore-v1';
 
 function readLocalState(){
  try{
@@ -131,6 +134,8 @@ export default function TripApp(){
  const [now,setNow]=useState(()=>new Date());
  const [online,setOnline]=useState(()=>typeof navigator==='undefined'||navigator.onLine);
  const [pendingSync,setPendingSync]=useState(false);
+ const [lastSyncedAt,setLastSyncedAt]=useState<string|null>(null);
+ const [restoreRollbackAvailable,setRestoreRollbackAvailable]=useState(false);
  const [offlineReady,setOfflineReady]=useState(false);
  const [offlineDownloading,setOfflineDownloading]=useState(false);
  const [offlineMessage,setOfflineMessage]=useState('');
@@ -159,6 +164,8 @@ export default function TripApp(){
   let active=true;
   const hasPending=localStorage.getItem(pendingSyncKey)==='true';
   setOfflineReady(localStorage.getItem(offlineReadyKey)==='true');
+  setLastSyncedAt(localStorage.getItem(lastSyncKey));
+  setRestoreRollbackAvailable(Boolean(localStorage.getItem(restoreRollbackKey)));
   void fetch('/api/state').then(async response=>{
    if(!response.ok)throw new Error('Trip state unavailable');
    const result=await response.json();
@@ -180,6 +187,7 @@ export default function TripApp(){
      localStorage.removeItem(pendingSyncKey);
      setPendingSync(false);
      setCloud(true);
+     recordSynced();
     }
    }
   }).catch(()=>{
@@ -191,6 +199,7 @@ export default function TripApp(){
   return()=>{active=false;};
  },[]);
  useEffect(()=>{
+  if(process.env.NODE_ENV!=='production')return;
   if(!('serviceWorker'in navigator))return;
   void navigator.serviceWorker.register('/sw.js');
   const handleMessage=(event:MessageEvent<{type?:string;message?:string}>)=>{
@@ -220,6 +229,7 @@ export default function TripApp(){
       localStorage.removeItem(pendingSyncKey);
       setPendingSync(false);
       setCloud(true);
+      recordSynced();
      }
     }catch{}
    }
@@ -244,8 +254,9 @@ export default function TripApp(){
   if(!showSharePanel||!publicUrl)return;
   let active=true;
   void import('qrcode').then(({default:QRCode})=>QRCode.toDataURL(publicUrl,{width:360,margin:2,color:{dark:'#123f2d',light:'#ffffff'}})).then(value=>{if(active)setQrCode(value);}).catch(()=>{if(active)setQrCode('');});
-  return()=>{active=false;};
+ return()=>{active=false;};
  },[publicUrl,showSharePanel]);
+ function recordSynced(){const value=new Date().toISOString();localStorage.setItem(lastSyncKey,value);setLastSyncedAt(value);}
  async function persist(next:TripState){
   if(!isEditor)return;
   setState(next);
@@ -259,7 +270,21 @@ export default function TripApp(){
     localStorage.removeItem(pendingSyncKey);
     setPendingSync(false);
     setCloud(true);
+    recordSynced();
    }
+  }catch{}
+ }
+ function restoreTrip(restored:TripState){
+  if(!state)return;
+  localStorage.setItem(restoreRollbackKey,JSON.stringify(state));
+  setRestoreRollbackAvailable(true);
+  void persist(restored);
+ }
+ function undoTripRestore(){
+  try{
+   const previous=localStorage.getItem(restoreRollbackKey);if(!previous)return;
+   const restored=restoredTripState(JSON.parse(previous));
+   localStorage.removeItem(restoreRollbackKey);setRestoreRollbackAvailable(false);void persist(restored);
   }catch{}
  }
  async function loadTripState(){
@@ -725,11 +750,11 @@ export default function TripApp(){
  const readiness=useMemo(()=>state?buildTripReadiness(state):null,[state]);
  const editorView=isEditor&&!publicPreview;
  const tripSettings=resolvedTripSettings(state?.settings);
- const visibleNavGroups=editorView?navGroups:publicNavGroups(tripSettings.publicSections);
+ const visibleNavGroups=useMemo(()=>editorView?navGroups:publicNavGroups(tripSettings.publicSections),[editorView,tripSettings.publicSections]);
  const activeNavGroup=visibleNavGroups.find(group=>(group.tabs as readonly Tab[]).includes(tab))??visibleNavGroups[0];
  useEffect(()=>{
   if(!visibleNavGroups.some(group=>group.tabs.includes(tab)))setTab(visibleNavGroups[0].tabs[0]);
- },[editorView,tab,tripSettings.publicSections.join('|')]);
+ },[tab,visibleNavGroups]);
 
  if(!state)return <main className="shell"><div className="card">{authReady?'Trip unavailable. Check your connection and refresh.':'Loading trip…'}</div></main>;
  const completedToday=currentDay?.items.filter(i=>i.done).length??0;
@@ -738,14 +763,15 @@ export default function TripApp(){
  const completedTrip=tripProgress.filter(i=>i.done).length;
  const itineraryHoursIssues=state.days.flatMap(day=>day.items.map(item=>checkItineraryHours(item,day.date,state.places))).filter((check):check is ItineraryHoursCheck=>Boolean(check&&(check.status==='closed'||check.status==='closesSoon')));
 
- const syncLabel=!editorView?publicPreview?'● Previewing public view':'● Public view':!online?'● Offline · changes save here':pendingSync?'○ Waiting to sync':cloud?'● Shared sync':'○ Device only';
+ const syncLabel=!editorView?publicPreview?'● Previewing public view':'● Public view':!online?'● Offline · saved on this device':pendingSync?'○ Waiting to sync':cloud?'● Shared sync':'○ Device only';
+ const syncDetail=editorView&&lastSyncedAt&&!pendingSync&&online?`Saved ${new Date(lastSyncedAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}`:'';
  return <>
-  <header className={`hero theme-${tripSettings.coverTheme}`}><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>{tripSettings.title}</h1><p>{tripSettings.destinations} · {tripDateLabel(tripSettings.startDate,tripSettings.endDate)}</p></div><div className="headerActions"><span className={`sync ${editorView&&online&&cloud&&!pendingSync?'online':''} ${!online?'offline':''}`}>{syncLabel}</span><button className="btn ghost" onClick={()=>{setShareMessage('');setShowSharePanel(true);}}>Share & access</button><button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}{editorView?<button className="btn ghost" onClick={lockEditor}>Lock editing</button>:!isEditor&&<button className="btn ghost" onClick={()=>{setAuthError('');setShowEditorUnlock(true);}}>Editor access</button>}{offlineMessage&&<span className="offlineMessage" role="status">{offlineMessage}</span>}</div></div></header>
+  <header className={`hero theme-${tripSettings.coverTheme}`}><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>{tripSettings.title}</h1><p>{tripSettings.destinations} · {tripDateLabel(tripSettings.startDate,tripSettings.endDate)}</p></div><div className="headerActions"><span className={`sync syncStack ${editorView&&online&&cloud&&!pendingSync?'online':''} ${!online?'offline':''}`}><strong>{syncLabel}</strong>{syncDetail&&<small>{syncDetail}</small>}</span><button className="btn ghost" onClick={()=>{setShareMessage('');setShowSharePanel(true);}}>Share & access</button>{editorView&&<button className="btn ghost" onClick={()=>setTab('Settings')}>Settings</button>}<button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}{editorView?<button className="btn ghost" onClick={lockEditor}>Lock editing</button>:!isEditor&&<button className="btn ghost" onClick={()=>{setAuthError('');setShowEditorUnlock(true);}}>Editor access</button>}{offlineMessage&&<span className="offlineMessage" role="status">{offlineMessage}</span>}</div></div></header>
   <main className={`shell ${editorView?'editorMode':'viewerMode'}`}>
    {!editorView&&<div className={`publicViewBanner ${publicPreview?'previewing':''}`}><span aria-hidden="true">◉</span><div><strong>{publicPreview?'Public preview':'Public view'}</strong><small>{publicPreview?'This is exactly what visitors see. Your editor session remains unlocked.':'Browse the trip and recap. Editing and private trip details are locked.'}</small></div>{publicPreview?<button className="textButton" onClick={exitPublicPreview}>Return to editor</button>:<button className="textButton" onClick={()=>setShowEditorUnlock(true)}>Unlock editing</button>}</div>}
    {!editorView&&tripSettings.publicMessage&&<section className="card publicWelcome"><div className="eyebrow">WELCOME TO OUR TRIP</div><p>{tripSettings.publicMessage}</p></section>}
    <nav className="tabs mainTabs" aria-label="Trip sections">{visibleNavGroups.map(group=><button key={group.label} className={activeNavGroup.label===group.label?'active':''} onClick={()=>setTab(group.tabs[0])}>{group.label}</button>)}</nav>
-   {activeNavGroup.tabs.length>1&&<nav className="subTabs" aria-label={`${activeNavGroup.label} views`}>{activeNavGroup.tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item==='Places'?'Saved Places':item}</button>)}</nav>}
+   {activeNavGroup.tabs.length>1&&<nav className="subTabs" aria-label={`${activeNavGroup.label} views`}>{activeNavGroup.tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{tabLabels[item]??item}</button>)}</nav>}
    {tab==='Overview'&&<TripOverview state={state} settings={tripSettings} canEdit={editorView} onToday={()=>setTab('Today')} onBrief={index=>{setBriefDayIndex(index);setShowDailyBrief(true);}} onEditDay={()=>setTab('Itinerary')}/>}
    {tab==='Today'&&currentDay&&<section>
    <div className="todayHero card"><div><div className="eyebrow">TODAY</div><h2>{currentDay.label} · {currentDay.city}</h2><p className="muted">Recommendations below are selected for this specific itinerary day.</p>{editorView&&<button className="btn dailyBriefOpen" onClick={()=>{setBriefDayIndex(currentDayIndex);setShowDailyBrief(true);}}>Open daily brief</button>}</div><div className="progressRing" aria-label={`${completedToday} of ${totalToday} complete`}><strong>{completedToday}/{totalToday}</strong><span>done</span></div></div>
@@ -790,7 +816,13 @@ export default function TripApp(){
     setTab('Itinerary');
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
-   {tab==='Settings'&&<TripSettingsView state={state} settings={tripSettings} publicUrl={publicUrl} onSave={settings=>{const next=structuredClone(state);next.settings=settings;void persist(next);}} onRestore={restored=>void persist(restored)} onPrint={()=>{setTab('Overview');window.setTimeout(()=>window.print(),200);}} onShare={()=>{setShareMessage('');setShowSharePanel(true);}} onPreview={enterPublicPreview}/>}
+   {tab==='Settings'&&<TripSettingsView
+    state={state} settings={tripSettings} publicUrl={publicUrl}
+    canUndoRestore={restoreRollbackAvailable} onUndoRestore={undoTripRestore}
+    onSave={settings=>{const next=structuredClone(state);next.settings=settings;void persist(next);}}
+    onRestore={restoreTrip} onPrint={()=>{setTab('Overview');window.setTimeout(()=>window.print(),200);}}
+    onShare={()=>{setShareMessage('');setShowSharePanel(true);}} onPreview={enterPublicPreview}
+   />}
    {tab==='Food'&&<section><div className="pageIntro"><div><div className="eyebrow">LOCAL FLAVORS</div><h2>Eat the trip</h2></div><span className="chip">{state.foods.filter(i=>i.done).length}/{state.foods.length} tried</span></div>{editorView&&<><div className="card tripDietPanel"><div><strong>Food preferences for this trip</strong><p className="muted small">These gently improve recommendations; they do not hide foods or judge what you choose.</p></div><div className="dietChoiceRow">{dietaryPreferences.map(preference=><label className={`dietChoice ${state.dietaryPreferences?.includes(preference.id)?'selected':''}`} key={preference.id}><input type="checkbox" checked={state.dietaryPreferences?.includes(preference.id)??false} onChange={()=>toggleTripDiet(preference.id)}/>{preference.label}{!preference.active&&<small>ready for later</small>}</label>)}</div></div><FoodConnectionsPanel foods={state.foods} places={state.places} onConnection={updateFoodPlaceConnection} onOpenPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></>}{['Try','Bring home'].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.foods.map((food,index)=>food.category===group&&<label className={`card checkCard ${food.done?'done':''}`} key={food.id}><input type="checkbox" checked={food.done} onChange={()=>toggleList('foods',index)}/><div><h3>{food.title}</h3>{food.notes&&<p className="muted small">{food.notes}</p>}{food.triedAt&&<p className="foodTriedMeta">Tried{food.triedAtPlaceId?` at ${state.places.find(place=>place.id===food.triedAtPlaceId)?.name??'a saved place'}`:''} · {new Date(food.triedAt).toLocaleDateString()}</p>}</div></label>)}</div></div>)}</section>}
    {tab==='Dietary'&&<DietaryReview places={state.places} onEdit={editPlace} onBulkEdit={editPlaces} onSave={savePlaceChanges}/>}
    {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>{editorView?'Find and manage places':'Explore saved places'}</h2><p className="muted">{editorView?'Organize saved spots by region, neighborhood, and practical dietary fit.':'Browse restaurants, neighborhoods, museums, and other trip ideas.'}</p></div><div className="placeActions"><span className="chip">{filtered.length} shown</span>{editorView&&unassignedAreaCount>0&&<button className="btn" onClick={()=>setArea('Unassigned')}>{unassignedAreaCount} unassigned</button>}{editorView&&suggestibleAreaCount>0&&<button className="btn" onClick={assignSuggestedAreas}>Suggest {suggestibleAreaCount} areas</button>}{editorView&&<button className="btn primary" onClick={addPlace}>+ Add place</button>}</div></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, neighborhoods, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid placeFilters"><select className="field" aria-label="Filter by region" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" aria-label="Filter by area" value={area} onChange={e=>setArea(e.target.value)}><option>All</option><option>Unassigned</option>{availableAreas.map(value=><option value={value} key={value}>{value}</option>)}</select><select className="field" aria-label="Filter by category" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" aria-label="Filter by priority" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select>{editorView&&<><select className="field" aria-label="Filter by dietary preference" value={dietFilter} onChange={e=>{setDietFilter(e.target.value as 'All'|DietaryPreference);setDietFitFilter('All');}}><option value="All">Any dietary rating</option>{dietaryPreferences.map(item=><option value={item.id} key={item.id}>{item.label}</option>)}</select><select className="field" aria-label="Filter by dietary fit" value={dietFitFilter} disabled={dietFilter==='All'} onChange={e=>setDietFitFilter(e.target.value as 'All'|DietaryFit)}><option value="All">Any evaluated fit</option>{dietaryFits.map(item=><option value={item.id} key={item.id}>{item.label}</option>)}</select></>}</div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)} onEdit={editorView?changes=>editPlace(place.id,changes):undefined} onEditHours={editorView?(day,changes)=>editPlaceHours(place.id,day,changes):undefined} onSave={editorView?savePlaceChanges:undefined} onGoogleUpdate={editorView?replacePlace:undefined} onDuplicate={editorView?()=>duplicatePlace(place.id):undefined} onDelete={editorView?()=>deletePlace(place.id):undefined} tripDates={state.days} tripFoods={state.foods}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
@@ -883,10 +915,11 @@ const publicSectionOptions:{id:PublicTripSection;label:string;detail:string}[]=[
 ];
 const coverThemes:{id:TripCoverTheme;label:string}[]=[{id:'forest',label:'Forest'},{id:'lake',label:'Lake'},{id:'sunset',label:'Sunset'}];
 
-function TripSettingsView({state,settings,publicUrl,onSave,onRestore,onPrint,onShare,onPreview}:{state:TripState;settings:TripSettings;publicUrl:string;onSave:(settings:TripSettings)=>void;onRestore:(state:TripState)=>void;onPrint:()=>void;onShare:()=>void;onPreview:()=>void}){
+function TripSettingsView({state,settings,publicUrl,canUndoRestore,onUndoRestore,onSave,onRestore,onPrint,onShare,onPreview}:{state:TripState;settings:TripSettings;publicUrl:string;canUndoRestore:boolean;onUndoRestore:()=>void;onSave:(settings:TripSettings)=>void;onRestore:(state:TripState)=>void;onPrint:()=>void;onShare:()=>void;onPreview:()=>void}){
  const [draft,setDraft]=useState(settings);
  const [saved,setSaved]=useState(false);
  const [transferMessage,setTransferMessage]=useState('');
+ const [restoreCandidate,setRestoreCandidate]=useState<{name:string;state:TripState}|null>(null);
  useEffect(()=>setDraft(settings),[settings]);
  function update<K extends keyof TripSettings>(key:K,value:TripSettings[K]){setDraft(current=>({...current,[key]:value}));setSaved(false);}
  function toggleSection(section:PublicTripSection){
@@ -898,14 +931,16 @@ function TripSettingsView({state,settings,publicUrl,onSave,onRestore,onPrint,onS
  const allFixedEntries=state.days.flatMap(day=>day.items.filter(isFixedItem).map(item=>({day,item})));
  const invalidCalendarEntries=allFixedEntries.filter(entry=>!calendarEntryDetails(entry).valid);
  const calendarCount=calendarEntries.length;
+ const tripHealth=validateTripState(state);
  async function importBackup(file?:File){
   if(!file)return;
   setTransferMessage('');
   try{
    const restored=restoredTripState(JSON.parse(await file.text()));
-   if(!window.confirm(`Replace the current trip with the backup from “${file.name}”? A fresh export is recommended first.`))return;
-   onRestore(restored);
-   setTransferMessage('Backup restored and shared.');
+   const validation=validateTripState(restored);
+   if(!validation.valid)throw new Error(`This backup cannot be restored: ${validation.errors[0]}`);
+   setRestoreCandidate({name:file.name,state:restored});
+   setTransferMessage(validation.warnings.length?`Backup is ready to preview with ${validation.warnings.length} item${validation.warnings.length===1?'':'s'} worth reviewing.`:'Backup is ready to preview.');
   }catch(error){setTransferMessage(error instanceof Error?error.message:'The backup could not be restored.');}
  }
  return <section className="settingsPage"><div className="pageIntro"><div><div className="eyebrow">TRIP SETTINGS</div><h2>Shape the trip and its public page</h2><p className="muted">These details travel with the trip, so the same system can support future destinations and shared templates.</p></div></div>
@@ -913,7 +948,7 @@ function TripSettingsView({state,settings,publicUrl,onSave,onRestore,onPrint,onS
    <div><div className="card settingsCard"><h3>Public cover</h3><p className="muted small">Choose the mood visitors see when they open the trip.</p><div className="themeChoices">{coverThemes.map(theme=><button type="button" className={`themeChoice theme-${theme.id} ${draft.coverTheme===theme.id?'selected':''}`} aria-pressed={draft.coverTheme===theme.id} onClick={()=>update('coverTheme',theme.id)} key={theme.id}><span>{theme.label}</span></button>)}</div></div>
     <div className="card settingsCard"><h3>Visible public sections</h3><p className="muted small">Private notes, confirmations, checklists, and dietary guidance stay hidden regardless.</p><div className="publicSectionChoices">{publicSectionOptions.map(section=><label className={draft.publicSections.includes(section.id)?'selected':''} key={section.id}><input type="checkbox" checked={draft.publicSections.includes(section.id)} onChange={()=>toggleSection(section.id)}/><span><strong>{section.label}</strong><small>{section.detail}</small></span></label>)}</div></div>
     <div className="card settingsCard shareHome"><h3>Share & access</h3><p className="muted small">Your public link is ready. Preview it before sharing or open the full access controls.</p><span className="settingsPublicUrl">{publicUrl||'Preparing public link…'}</span><div className="shareButtons"><button className="btn primary" onClick={onShare}>Open sharing tools</button><button className="btn" onClick={onPreview}>Preview public page</button></div></div>
-    <div className="card settingsCard transferCard"><h3>Export & backup</h3><p className="muted small">Take the schedule with you or keep a private, portable copy of the complete trip.</p><div className="transferActions"><button className="btn" disabled={!calendarCount} onClick={()=>downloadText(`${filename}.ics`,tripCalendar(state),'text/calendar;charset=utf-8')}>Download calendar <small>{calendarCount} fixed plans</small></button><button className="btn" onClick={onPrint}>Print itinerary</button><button className="btn" onClick={()=>downloadText(`${filename}-backup.json`,tripBackup(state),'application/json;charset=utf-8')}>Download backup</button><label className="btn transferUpload">Restore backup<input type="file" accept="application/json,.json" onChange={event=>{void importBackup(event.currentTarget.files?.[0]);event.currentTarget.value='';}}/></label></div><details className="calendarPreview"><summary>Preview {calendarCount} calendar event{calendarCount===1?'':'s'}</summary><div>{calendarEntries.map(entry=>{const details=calendarEntryDetails(entry);return <div className="calendarPreviewRow" key={entry.item.id}><span><strong>{entry.item.title}</strong><small>{details.dateLabel} · {details.timeLabel}</small></span><span>{details.duration} min · {details.timeZoneLabel}</span></div>;})}</div></details>{invalidCalendarEntries.length>0&&<div className="calendarIssues"><strong>{invalidCalendarEntries.length} fixed plan{invalidCalendarEntries.length===1?' needs':'s need'} attention</strong>{invalidCalendarEntries.map(entry=>{const details=calendarEntryDetails(entry);return <button className="calendarIssue" type="button" onClick={()=>{setTransferMessage(`${entry.item.title}: ${details.issue}`);}} key={entry.item.id}><span>{entry.item.title}</span><small>{details.issue}</small></button>;})}</div>}<p className="transferPrivacy">Backups contain private notes and confirmation details. Reservation file attachments remain stored only on this device.</p>{transferMessage&&<p className="settingsSaved" role="status">{transferMessage}</p>}</div></div>
+    <div className="card settingsCard transferCard"><div className="between"><div><h3>Trip health & backup</h3><p className="muted small">Validate the trip, take the schedule with you, or keep a private portable copy.</p></div><span className={`healthBadge ${tripHealth.valid?'healthy':'attention'}`}>{tripHealth.valid?'✓ Data healthy':`${tripHealth.errors.length} issue${tripHealth.errors.length===1?'':'s'}`}</span></div>{tripHealth.warnings.length>0&&<details className="tripHealthDetails"><summary>{tripHealth.warnings.length} planning note{tripHealth.warnings.length===1?'':'s'}</summary><ul>{tripHealth.warnings.slice(0,8).map(item=><li key={item}>{item}</li>)}</ul></details>}<div className="transferActions"><button className="btn" disabled={!calendarCount} onClick={()=>downloadText(`${filename}.ics`,tripCalendar(state),'text/calendar;charset=utf-8')}>Download calendar <small>{calendarCount} fixed plans</small></button><button className="btn" onClick={onPrint}>Print itinerary</button><button className="btn" onClick={()=>downloadText(`${filename}-backup.json`,tripBackup(state),'application/json;charset=utf-8')}>Download backup</button><label className="btn transferUpload">Choose backup<input type="file" accept="application/json,.json" onChange={event=>{void importBackup(event.currentTarget.files?.[0]);event.currentTarget.value='';}}/></label>{canUndoRestore&&<button className="btn" onClick={onUndoRestore}>Undo last restore</button>}</div>{restoreCandidate&&<div className="restorePreview"><div><div className="eyebrow">RESTORE PREVIEW</div><h4>{restoreCandidate.state.settings?.title||'Trip Hub backup'}</h4><p>{restoreCandidate.name} · {restoreCandidate.state.days.length} days · {restoreCandidate.state.places.length} places · {restoreCandidate.state.days.flatMap(day=>day.items).length} itinerary items</p></div><div className="placeActions"><button className="btn" onClick={()=>setRestoreCandidate(null)}>Cancel</button><button className="btn primary" onClick={()=>{onRestore(restoreCandidate.state);setRestoreCandidate(null);setTransferMessage('Backup restored. You can undo this restore until another one is made.');}}>Restore this backup</button></div></div>}<details className="calendarPreview"><summary>Preview {calendarCount} calendar event{calendarCount===1?'':'s'}</summary><div>{calendarEntries.map(entry=>{const details=calendarEntryDetails(entry);return <div className="calendarPreviewRow" key={entry.item.id}><span><strong>{entry.item.title}</strong><small>{details.dateLabel} · {details.timeLabel}</small></span><span>{details.duration} min · {details.timeZoneLabel}</span></div>;})}</div></details>{invalidCalendarEntries.length>0&&<div className="calendarIssues"><strong>{invalidCalendarEntries.length} fixed plan{invalidCalendarEntries.length===1?' needs':'s need'} attention</strong>{invalidCalendarEntries.map(entry=>{const details=calendarEntryDetails(entry);return <button className="calendarIssue" type="button" onClick={()=>{setTransferMessage(`${entry.item.title}: ${details.issue}`);}} key={entry.item.id}><span>{entry.item.title}</span><small>{details.issue}</small></button>;})}</div>}<p className="transferPrivacy">Backups contain private notes and confirmation details. Reservation file attachments remain stored only on this device.</p>{transferMessage&&<p className="settingsSaved" role="status">{transferMessage}</p>}</div></div>
   </div>
  </section>;
 }

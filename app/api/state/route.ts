@@ -6,6 +6,7 @@ import {applyDietaryGuidance} from '@/lib/dietary-guidance';
 import {validToken} from '@/lib/auth';
 import {publicTripState} from '@/lib/public-state';
 import type {TripState} from '@/lib/types';
+import {validateTripState} from '@/lib/trip-validation';
 
 function mergeState(stored:TripState):TripState{
  const storedDays=new Map(stored.days.map(day=>[day.date,day]));
@@ -53,8 +54,10 @@ export async function GET(){
 export async function PUT(req:Request){
  if(!(await editorRequest()))return NextResponse.json({ok:false,cloud:false,error:'Editor access required'},{status:401});
  try{
-  const state=await req.json();
-  const saved=await saveState(state);
+  const state=await req.json() as unknown;
+  const validation=validateTripState(state);
+  if(!validation.valid)return NextResponse.json({ok:false,cloud:false,error:'Trip data failed validation.',details:validation.errors},{status:400});
+  const saved=await saveState(state as TripState);
   return NextResponse.json({ok:true,cloud:saved});
  }catch(error){
   console.error('Trip state save failed; keeping device copy.',error);
