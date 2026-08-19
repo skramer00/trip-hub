@@ -1,0 +1,26 @@
+.hero.theme-lake{background:linear-gradient(135deg,#123b56,#217799)}
+.hero.theme-sunset{background:linear-gradient(135deg,#61334a,#bb6942)}
+.publicWelcome{margin-top:12px;padding:19px 21px}
+.publicWelcome p{max-width:760px;margin:6px 0 0;font-size:1.03rem;line-height:1.55}
+.settingsGrid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr);gap:14px}
+.settingsForm,.settingsCard{display:grid;gap:13px}
+.settingsForm h3,.settingsCard h3{margin:0}
+.settingsForm>div>p,.settingsCard>p{margin:4px 0 0}
+.settingsForm label{display:grid;gap:6px;color:#33473d;font-size:.78rem;font-weight:800}
+.settingsDates{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.settingsSaved{margin:0;color:var(--accent);font-size:.78rem;font-weight:750}
+.themeChoices{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.themeChoice{height:76px;display:flex;align-items:flex-end;border:2px solid transparent;border-radius:13px;padding:10px;color:#fff;cursor:pointer;background:linear-gradient(135deg,#103b2a,#176a43)}
+.themeChoice.theme-lake{background:linear-gradient(135deg,#123b56,#217799)}
+.themeChoice.theme-sunset{background:linear-gradient(135deg,#61334a,#bb6942)}
+.themeChoice.selected{border-color:#fff;box-shadow:0 0 0 3px var(--accent)}
+.themeChoice span{font-size:.78rem;font-weight:850}
+.publicSectionChoices{display:grid;gap:8px}
+.publicSectionChoices label{display:grid;grid-template-columns:auto 1fr;align-items:start;gap:10px;border:1px solid var(--line);border-radius:12px;padding:11px;cursor:pointer}
+.publicSectionChoices label.selected{border-color:#98bda7;background:#f1f8f4}
+.publicSectionChoices input{width:18px;height:18px;accent-color:var(--accent)}
+.publicSectionChoices span{display:grid;gap:2px}
+.publicSectionChoices small{color:var(--muted);font-size:.7rem}
+.shareHome{margin-bottom:0}
+.settingsPublicUrl{overflow:hidden;border:1px solid var(--line);border-radius:10px;background:#f8faf9;padding:9px 10px;color:var(--muted);font-size:.72rem;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:760px){.settingsGrid{grid-template-columns:1fr}.settingsDates{grid-template-columns:1fr}.themeChoices{grid-template-columns:repeat(3,1fr)}.themeChoice{height:64px}}

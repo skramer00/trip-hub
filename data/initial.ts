@@ -1,6 +1,7 @@
 import {gunzipSync} from 'node:zlib';
 import {compressedPlaces} from './placesCompressed';
 import {applyDietaryGuidance} from '@/lib/dietary-guidance';
+import {defaultTripSettings} from '@/lib/trip-settings';
 import type {ItineraryItem,Place,TripDay,TripState} from '@/lib/types';
 
 type CompactPlace=[string,0|1,string,string,string,string[],'must'|'possible'|'backup',string[]];
@@ -50,6 +51,7 @@ const rawDays:TripDay[]=[
 const days=rawDays.map(day=>({...day,items:day.items.map(item=>({...item,...routeById[item.id]}))}));
 
 export const initialState:TripState={
+ settings:defaultTripSettings,
  days,
  foods:[{id:'f1',title:'Peameal bacon sandwich',category:'Try',done:false,notes:'Carousel Bakery'},{id:'f2',title:'Poutine',category:'Try',done:false},{id:'f3',title:'Butter tart',category:'Try',done:false},{id:'f4',title:'Montreal-style bagel',category:'Try',done:false},{id:'f5',title:'Buffalo wings',category:'Try',done:false},{id:'f6',title:'Beef on weck',category:'Try',done:false},{id:'f7',title:'Stinger sub',category:'Try',done:false},{id:'f8',title:'Sponge candy',category:'Bring home',done:false},{id:'f9',title:'Maple syrup',category:'Bring home',done:false},{id:'f10',title:'Coffee Crisp and Aero bars',category:'Bring home',done:false},{id:'f11',title:'All-Dressed or ketchup chips',category:'Bring home',done:false}],
  packing:[{id:'p1',title:'Passports and IDs',category:'Documents',done:true},{id:'p2',title:'Flight, hotel, and game confirmations',category:'Documents',done:false},{id:'p3',title:'Nexium and eye drops',category:'Health',done:false},{id:'p4',title:'Chargers and power banks',category:'Tech',done:false},{id:'p5',title:'iPad and headphones',category:'Tech',done:false},{id:'p6',title:'Chargers jerseys',category:'Clothes',done:false},{id:'p7',title:'Jacket and rain layer',category:'Clothes',done:false},{id:'p8',title:'Comfortable non-slip shoes',category:'Clothes',done:false},{id:'p9',title:'Packable duffel',category:'Bags',done:false},{id:'p10',title:'Empty water bottle',category:'Travel',done:false}],

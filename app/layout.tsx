@@ -1,9 +1,11 @@
 import './globals.css';
+import './settings.css';
 import type {Metadata,Viewport} from 'next';
 
 export const metadata:Metadata={
- title:'Toronto Trip Hub',
- description:'Shared Toronto, Niagara Falls and Buffalo trip planner',
+ metadataBase:new URL('https://www.skramer.app'),
+ title:{default:'Trip Hub',template:'%s | Trip Hub'},
+ description:'A shared trip itinerary, guide, and travel companion.',
  applicationName:'Trip Hub',
  appleWebApp:{capable:true,statusBarStyle:'default',title:'Trip Hub'},
 };

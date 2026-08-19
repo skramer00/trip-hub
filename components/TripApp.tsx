@@ -14,29 +14,32 @@ import {deleteReservationAttachment,listReservationAttachments,saveReservationAt
 import type {ReservationAttachment} from '@/lib/attachments';
 import type {ItineraryHoursCheck} from '@/lib/place-hours';
 import type {AssistantLocation,AssistantState,SuggestedPlace} from '@/lib/assistant';
-import type {CheckItem,GooglePlaceCandidate,ItineraryItem,JournalMoment,JournalMomentType,NearbyDietaryMode,NearbyPreset,Place,TripState,Weekday} from '@/lib/types';
+import type {CheckItem,GooglePlaceCandidate,ItineraryItem,JournalMoment,JournalMomentType,NearbyDietaryMode,NearbyPreset,Place,PublicTripSection,TripCoverTheme,TripSettings,TripState,Weekday} from '@/lib/types';
 import type {DietaryFit,DietaryPreference} from '@/lib/types';
 import {dietaryFitLabel,dietaryFits,dietaryPreferenceLabel,dietaryPreferences,dietaryRating,isFoodPlace,setDietaryRating} from '@/lib/dietary';
 import {placeSpecialtyFoodIds,placeSpecialtyFoods} from '@/lib/food-specialties';
 import {weatherNotice,weatherPackingReminders,weatherPreference} from '@/lib/weather';
 import {publicTripState} from '@/lib/public-state';
+import {resolvedTripSettings,tripDateLabel} from '@/lib/trip-settings';
 import type {WeatherResponse} from '@/lib/weather';
 import DietaryReview from '@/components/DietaryReview';
 
-const tabs=['Today','Assistant','Journal','Nearby','Board','Itinerary','Locations','Reservations','Food','Dietary','Places','Hours','Checklist'] as const;
+const tabs=['Today','Assistant','Journal','Nearby','Board','Itinerary','Locations','Reservations','Settings','Food','Dietary','Places','Hours','Checklist'] as const;
 type Tab=(typeof tabs)[number];
 const navGroups=[
  {label:'Today',tabs:['Today','Assistant','Journal'] as Tab[]},
- {label:'Plan',tabs:['Board','Itinerary','Locations','Reservations'] as Tab[]},
+ {label:'Plan',tabs:['Board','Itinerary','Locations','Reservations','Settings'] as Tab[]},
  {label:'Explore',tabs:['Nearby','Places','Hours'] as Tab[]},
  {label:'Food',tabs:['Food','Dietary'] as Tab[]},
  {label:'Checklist',tabs:['Checklist'] as Tab[]}
 ] as const;
-const publicNavGroups=[
- {label:'Today',tabs:['Today','Assistant','Journal'] as Tab[]},
- {label:'Explore',tabs:['Nearby','Places'] as Tab[]},
- {label:'Food',tabs:['Food'] as Tab[]}
-] as const;
+function publicNavGroups(sections:PublicTripSection[]){
+ const groups:{label:string;tabs:Tab[]}[]=[];
+ if(sections.includes('today')||sections.includes('recap'))groups.push({label:'Trip',tabs:[...(sections.includes('today')?['Today','Assistant'] as Tab[]:[]),...(sections.includes('recap')?['Journal'] as Tab[]:[])]});
+ if(sections.includes('explore'))groups.push({label:'Explore',tabs:['Nearby','Places']});
+ if(sections.includes('food'))groups.push({label:'Food',tabs:['Food']});
+ return groups.length?groups:[{label:'Trip',tabs:['Today'] as Tab[]}];
+}
 type InstallPromptEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
 type AssistantPreview={date:string;time:string;area:string};
 
@@ -285,8 +288,9 @@ export default function TripApp(){
  }
  async function sharePublicLink(){
   if(!publicUrl)return;
+  const settings=resolvedTripSettings(state?.settings);
   if(navigator.share){
-   try{await navigator.share({title:'Toronto · Niagara · Buffalo',text:'Follow our Toronto, Niagara Falls, and Buffalo trip.',url:publicUrl});setShareMessage('Share sheet opened.');return;}catch{}
+   try{await navigator.share({title:settings.title,text:settings.publicMessage,url:publicUrl});setShareMessage('Share sheet opened.');return;}catch{}
   }
   await copyPublicLink();
  }
@@ -707,8 +711,12 @@ export default function TripApp(){
  const reservations=useMemo(()=>state?state.days.flatMap(day=>day.items.flatMap(item=>isFixedItem(item)?[{day,item}]:[])):[],[state]);
  const readiness=useMemo(()=>state?buildTripReadiness(state):null,[state]);
  const editorView=isEditor&&!publicPreview;
- const visibleNavGroups=editorView?navGroups:publicNavGroups;
+ const tripSettings=resolvedTripSettings(state?.settings);
+ const visibleNavGroups=editorView?navGroups:publicNavGroups(tripSettings.publicSections);
  const activeNavGroup=visibleNavGroups.find(group=>(group.tabs as readonly Tab[]).includes(tab))??visibleNavGroups[0];
+ useEffect(()=>{
+  if(!visibleNavGroups.some(group=>group.tabs.includes(tab)))setTab(visibleNavGroups[0].tabs[0]);
+ },[editorView,tab,tripSettings.publicSections.join('|')]);
 
  if(!state)return <main className="shell"><div className="card">{authReady?'Trip unavailable. Check your connection and refresh.':'Loading trip…'}</div></main>;
  const completedToday=currentDay?.items.filter(i=>i.done).length??0;
@@ -719,9 +727,10 @@ export default function TripApp(){
 
  const syncLabel=!editorView?publicPreview?'● Previewing public view':'● Public view':!online?'● Offline · changes save here':pendingSync?'○ Waiting to sync':cloud?'● Shared sync':'○ Device only';
  return <>
-  <header className="hero"><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>Toronto · Niagara · Buffalo</h1><p>September 24–October 1, 2026</p></div><div className="headerActions"><span className={`sync ${editorView&&online&&cloud&&!pendingSync?'online':''} ${!online?'offline':''}`}>{syncLabel}</span><button className="btn ghost" onClick={()=>{setShareMessage('');setShowSharePanel(true);}}>Share & access</button><button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}{editorView?<button className="btn ghost" onClick={lockEditor}>Lock editing</button>:!isEditor&&<button className="btn ghost" onClick={()=>{setAuthError('');setShowEditorUnlock(true);}}>Editor access</button>}{offlineMessage&&<span className="offlineMessage" role="status">{offlineMessage}</span>}</div></div></header>
+  <header className={`hero theme-${tripSettings.coverTheme}`}><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>{tripSettings.title}</h1><p>{tripSettings.destinations} · {tripDateLabel(tripSettings.startDate,tripSettings.endDate)}</p></div><div className="headerActions"><span className={`sync ${editorView&&online&&cloud&&!pendingSync?'online':''} ${!online?'offline':''}`}>{syncLabel}</span><button className="btn ghost" onClick={()=>{setShareMessage('');setShowSharePanel(true);}}>Share & access</button><button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}{editorView?<button className="btn ghost" onClick={lockEditor}>Lock editing</button>:!isEditor&&<button className="btn ghost" onClick={()=>{setAuthError('');setShowEditorUnlock(true);}}>Editor access</button>}{offlineMessage&&<span className="offlineMessage" role="status">{offlineMessage}</span>}</div></div></header>
   <main className={`shell ${editorView?'editorMode':'viewerMode'}`}>
    {!editorView&&<div className={`publicViewBanner ${publicPreview?'previewing':''}`}><span aria-hidden="true">◉</span><div><strong>{publicPreview?'Public preview':'Public view'}</strong><small>{publicPreview?'This is exactly what visitors see. Your editor session remains unlocked.':'Browse the trip and recap. Editing and private trip details are locked.'}</small></div>{publicPreview?<button className="textButton" onClick={exitPublicPreview}>Return to editor</button>:<button className="textButton" onClick={()=>setShowEditorUnlock(true)}>Unlock editing</button>}</div>}
+   {!editorView&&tripSettings.publicMessage&&<section className="card publicWelcome"><div className="eyebrow">WELCOME TO OUR TRIP</div><p>{tripSettings.publicMessage}</p></section>}
    <nav className="tabs mainTabs" aria-label="Trip sections">{visibleNavGroups.map(group=><button key={group.label} className={activeNavGroup.label===group.label?'active':''} onClick={()=>setTab(group.tabs[0])}>{group.label}</button>)}</nav>
    {activeNavGroup.tabs.length>1&&<nav className="subTabs" aria-label={`${activeNavGroup.label} views`}>{activeNavGroup.tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item==='Places'?'Saved Places':item}</button>)}</nav>}
    {tab==='Today'&&currentDay&&<section>
@@ -767,6 +776,7 @@ export default function TripApp(){
     setTab('Itinerary');
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
+   {tab==='Settings'&&<TripSettingsView settings={tripSettings} publicUrl={publicUrl} onSave={settings=>{const next=structuredClone(state);next.settings=settings;void persist(next);}} onShare={()=>{setShareMessage('');setShowSharePanel(true);}} onPreview={enterPublicPreview}/>}
    {tab==='Food'&&<section><div className="pageIntro"><div><div className="eyebrow">LOCAL FLAVORS</div><h2>Eat the trip</h2></div><span className="chip">{state.foods.filter(i=>i.done).length}/{state.foods.length} tried</span></div>{editorView&&<><div className="card tripDietPanel"><div><strong>Food preferences for this trip</strong><p className="muted small">These gently improve recommendations; they do not hide foods or judge what you choose.</p></div><div className="dietChoiceRow">{dietaryPreferences.map(preference=><label className={`dietChoice ${state.dietaryPreferences?.includes(preference.id)?'selected':''}`} key={preference.id}><input type="checkbox" checked={state.dietaryPreferences?.includes(preference.id)??false} onChange={()=>toggleTripDiet(preference.id)}/>{preference.label}{!preference.active&&<small>ready for later</small>}</label>)}</div></div><FoodConnectionsPanel foods={state.foods} places={state.places} onConnection={updateFoodPlaceConnection} onOpenPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></>}{['Try','Bring home'].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.foods.map((food,index)=>food.category===group&&<label className={`card checkCard ${food.done?'done':''}`} key={food.id}><input type="checkbox" checked={food.done} onChange={()=>toggleList('foods',index)}/><div><h3>{food.title}</h3>{food.notes&&<p className="muted small">{food.notes}</p>}{food.triedAt&&<p className="foodTriedMeta">Tried{food.triedAtPlaceId?` at ${state.places.find(place=>place.id===food.triedAtPlaceId)?.name??'a saved place'}`:''} · {new Date(food.triedAt).toLocaleDateString()}</p>}</div></label>)}</div></div>)}</section>}
    {tab==='Dietary'&&<DietaryReview places={state.places} onEdit={editPlace} onBulkEdit={editPlaces} onSave={savePlaceChanges}/>}
    {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>{editorView?'Find and manage places':'Explore saved places'}</h2><p className="muted">{editorView?'Organize saved spots by region, neighborhood, and practical dietary fit.':'Browse restaurants, neighborhoods, museums, and other trip ideas.'}</p></div><div className="placeActions"><span className="chip">{filtered.length} shown</span>{editorView&&unassignedAreaCount>0&&<button className="btn" onClick={()=>setArea('Unassigned')}>{unassignedAreaCount} unassigned</button>}{editorView&&suggestibleAreaCount>0&&<button className="btn" onClick={assignSuggestedAreas}>Suggest {suggestibleAreaCount} areas</button>}{editorView&&<button className="btn primary" onClick={addPlace}>+ Add place</button>}</div></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, neighborhoods, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid placeFilters"><select className="field" aria-label="Filter by region" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" aria-label="Filter by area" value={area} onChange={e=>setArea(e.target.value)}><option>All</option><option>Unassigned</option>{availableAreas.map(value=><option value={value} key={value}>{value}</option>)}</select><select className="field" aria-label="Filter by category" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" aria-label="Filter by priority" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select>{editorView&&<><select className="field" aria-label="Filter by dietary preference" value={dietFilter} onChange={e=>{setDietFilter(e.target.value as 'All'|DietaryPreference);setDietFitFilter('All');}}><option value="All">Any dietary rating</option>{dietaryPreferences.map(item=><option value={item.id} key={item.id}>{item.label}</option>)}</select><select className="field" aria-label="Filter by dietary fit" value={dietFitFilter} disabled={dietFilter==='All'} onChange={e=>setDietFitFilter(e.target.value as 'All'|DietaryFit)}><option value="All">Any evaluated fit</option>{dietaryFits.map(item=><option value={item.id} key={item.id}>{item.label}</option>)}</select></>}</div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)} onEdit={editorView?changes=>editPlace(place.id,changes):undefined} onEditHours={editorView?(day,changes)=>editPlaceHours(place.id,day,changes):undefined} onSave={editorView?savePlaceChanges:undefined} onGoogleUpdate={editorView?replacePlace:undefined} onDuplicate={editorView?()=>duplicatePlace(place.id):undefined} onDelete={editorView?()=>deletePlace(place.id):undefined} tripDates={state.days} tripFoods={state.foods}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
@@ -783,6 +793,32 @@ export default function TripApp(){
   {showSharePanel&&<div className="editorUnlockBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setShowSharePanel(false);}}><section className="card shareAccessPanel" role="dialog" aria-modal="true" aria-labelledby="share-access-title"><button className="editorUnlockClose" aria-label="Close share and access" onClick={()=>setShowSharePanel(false)}>×</button><div className="eyebrow">SHARE & ACCESS</div><div className="shareAccessHeading"><div><h2 id="share-access-title">Invite people into the trip</h2><p className="muted">Visitors can browse the public itinerary, places, food list, and recap without seeing private planning details.</p></div><span className={`accessModeBadge ${editorView?'editing':'public'}`}>{editorView?'Editing unlocked':'Public view'}</span></div><div className="shareAccessGrid"><div className="shareLinkCard"><strong>Public trip link</strong><div className="shareUrl"><span>{publicUrl||'Loading link…'}</span><button className="btn primary" onClick={copyPublicLink} disabled={!publicUrl}>Copy</button></div><div className="shareButtons"><button className="btn" onClick={sharePublicLink} disabled={!publicUrl}>Share from this device</button>{isEditor&&<button className="btn" onClick={enterPublicPreview}>Preview public view</button>}</div>{shareMessage&&<p className="shareMessage" role="status">{shareMessage}</p>}</div><div className="qrCard"><div className="qrFrame">{qrCode?<Image src={qrCode} alt="QR code for the public Trip Hub link" width={180} height={180} unoptimized/>:<span>Preparing QR code…</span>}</div><small>Scan to open the public trip</small></div></div><div className="privacySummary"><div><span className="privacyIcon public">✓</span><div><strong>Visitors can see</strong><p>Public itinerary, saved places, food ideas, nearby suggestions, and the trip recap.</p></div></div><div><span className="privacyIcon private">⌁</span><div><strong>Stays private</strong><p>Confirmation numbers, Key Info, personal notes, packing lists, dietary guidance, and editing tools.</p></div></div></div>{isEditor?<div className="shareAccessFooter"><div><strong>Editor session is active</strong><span>{publicPreview?'You are previewing the public experience.':'Your private editing tools are currently available on this device.'}</span></div><button className="btn dangerButton" onClick={lockEditor}>Lock editing now</button></div>:<div className="shareAccessFooter"><div><strong>Viewing publicly</strong><span>Use the shared PIN if you need to make changes.</span></div><button className="btn" onClick={()=>{setShowSharePanel(false);setAuthError('');setShowEditorUnlock(true);}}>Editor access</button></div>}</section></div>}
   {showEditorUnlock&&<div className="editorUnlockBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setShowEditorUnlock(false);}}><section className="card editorUnlock" role="dialog" aria-modal="true" aria-labelledby="editor-unlock-title"><button className="editorUnlockClose" aria-label="Close editor access" onClick={()=>setShowEditorUnlock(false)}>×</button><div className="eyebrow">PRIVATE EDITING</div><h2 id="editor-unlock-title">Unlock editor mode</h2><p className="muted">Enter the shared editor PIN to update plans, confirmations, private notes, dietary guidance, and checklists.</p><form onSubmit={unlockEditor}><label>Editor PIN<input className="field" type="password" autoFocus autoComplete="current-password" value={editorPin} onChange={event=>setEditorPin(event.target.value)}/></label>{authError&&<p className="error" role="alert">{authError}</p>}<button className="btn primary" disabled={authBusy||!editorPin}>{authBusy?'Unlocking…':'Unlock editing'}</button></form></section></div>}
  </>;
+}
+
+const publicSectionOptions:{id:PublicTripSection;label:string;detail:string}[]=[
+ {id:'today',label:'Today & Assistant',detail:'Daily plan and calm next-step guidance'},
+ {id:'recap',label:'Trip recap',detail:'Public journal moments and trip memories'},
+ {id:'explore',label:'Explore',detail:'Nearby ideas and saved public places'},
+ {id:'food',label:'Food',detail:'Foods to try and bring home'}
+];
+const coverThemes:{id:TripCoverTheme;label:string}[]=[{id:'forest',label:'Forest'},{id:'lake',label:'Lake'},{id:'sunset',label:'Sunset'}];
+
+function TripSettingsView({settings,publicUrl,onSave,onShare,onPreview}:{settings:TripSettings;publicUrl:string;onSave:(settings:TripSettings)=>void;onShare:()=>void;onPreview:()=>void}){
+ const [draft,setDraft]=useState(settings);
+ const [saved,setSaved]=useState(false);
+ useEffect(()=>setDraft(settings),[settings]);
+ function update<K extends keyof TripSettings>(key:K,value:TripSettings[K]){setDraft(current=>({...current,[key]:value}));setSaved(false);}
+ function toggleSection(section:PublicTripSection){
+  const selected=draft.publicSections.includes(section)?draft.publicSections.filter(item=>item!==section):[...draft.publicSections,section];
+  if(selected.length)update('publicSections',selected);
+ }
+ return <section className="settingsPage"><div className="pageIntro"><div><div className="eyebrow">TRIP SETTINGS</div><h2>Shape the trip and its public page</h2><p className="muted">These details travel with the trip, so the same system can support future destinations and shared templates.</p></div></div>
+  <div className="settingsGrid"><form className="card settingsForm" onSubmit={event=>{event.preventDefault();onSave(draft);setSaved(true);}}><div><h3>Trip identity</h3><p className="muted small">Used in the header, share sheet, and public link preview.</p></div><label>Trip title<input className="field" value={draft.title} onChange={event=>update('title',event.target.value)}/></label><label>Destinations<input className="field" value={draft.destinations} onChange={event=>update('destinations',event.target.value)}/></label><div className="settingsDates"><label>Start date<input className="field" type="date" value={draft.startDate} onChange={event=>update('startDate',event.target.value)}/></label><label>End date<input className="field" type="date" value={draft.endDate} onChange={event=>update('endDate',event.target.value)}/></label></div><label>Public welcome message<textarea className="field" rows={4} value={draft.publicMessage} onChange={event=>update('publicMessage',event.target.value)}/></label><button className="btn primary" disabled={!draft.title.trim()||!draft.destinations.trim()}>Save trip settings</button>{saved&&<p className="settingsSaved" role="status">Trip settings saved and shared.</p>}</form>
+   <div><div className="card settingsCard"><h3>Public cover</h3><p className="muted small">Choose the mood visitors see when they open the trip.</p><div className="themeChoices">{coverThemes.map(theme=><button type="button" className={`themeChoice theme-${theme.id} ${draft.coverTheme===theme.id?'selected':''}`} aria-pressed={draft.coverTheme===theme.id} onClick={()=>update('coverTheme',theme.id)} key={theme.id}><span>{theme.label}</span></button>)}</div></div>
+    <div className="card settingsCard"><h3>Visible public sections</h3><p className="muted small">Private notes, confirmations, checklists, and dietary guidance stay hidden regardless.</p><div className="publicSectionChoices">{publicSectionOptions.map(section=><label className={draft.publicSections.includes(section.id)?'selected':''} key={section.id}><input type="checkbox" checked={draft.publicSections.includes(section.id)} onChange={()=>toggleSection(section.id)}/><span><strong>{section.label}</strong><small>{section.detail}</small></span></label>)}</div></div>
+    <div className="card settingsCard shareHome"><h3>Share & access</h3><p className="muted small">Your public link is ready. Preview it before sharing or open the full access controls.</p><span className="settingsPublicUrl">{publicUrl||'Preparing public link…'}</span><div className="shareButtons"><button className="btn primary" onClick={onShare}>Open sharing tools</button><button className="btn" onClick={onPreview}>Preview public page</button></div></div></div>
+  </div>
+ </section>;
 }
 
 function TripReadinessDashboard({readiness,onOpen}:{readiness:ReturnType<typeof buildTripReadiness>;onOpen:(target:ReadinessTarget)=>void}){
