@@ -65,9 +65,9 @@ function readLocalState(){
 
 async function pushCloudState(next:TripState){
  const response=await fetch('/api/state',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(next)});
- if(!response.ok)return false;
- const result=await response.json();
- return Boolean(result.cloud);
+ const result=await response.json().catch(()=>({})) as {cloud?:boolean;error?:string};
+ if(!response.ok||!result.cloud)throw new Error(result.error??'Shared saving is temporarily unavailable.');
+ return true;
 }
 
 function activeDayIndex(days:TripState['days']){
@@ -134,6 +134,7 @@ export default function TripApp(){
  const [now,setNow]=useState(()=>new Date());
  const [online,setOnline]=useState(()=>typeof navigator==='undefined'||navigator.onLine);
  const [pendingSync,setPendingSync]=useState(false);
+ const [syncError,setSyncError]=useState('');
  const [lastSyncedAt,setLastSyncedAt]=useState<string|null>(null);
  const [restoreRollbackAvailable,setRestoreRollbackAvailable]=useState(false);
  const [offlineReady,setOfflineReady]=useState(false);
@@ -182,13 +183,16 @@ export default function TripApp(){
    setCloud(Boolean(result.cloud));
    if(editor)localStorage.setItem(localStateKey,JSON.stringify(selected));
    if(editor&&hasPending&&local&&navigator.onLine){
-    const synced=await pushCloudState(local);
-    if(active&&synced){
-     localStorage.removeItem(pendingSyncKey);
-     setPendingSync(false);
-     setCloud(true);
-     recordSynced();
-    }
+    try{
+     const synced=await pushCloudState(local);
+     if(active&&synced){
+      localStorage.removeItem(pendingSyncKey);
+      setPendingSync(false);
+      setCloud(true);
+      recordSynced();
+      setSyncError('');
+     }
+    }catch(error){if(active)setSyncError(error instanceof Error?error.message:'Shared saving is temporarily unavailable.');}
    }
   }).catch(()=>{
    if(!active)return;
@@ -230,8 +234,9 @@ export default function TripApp(){
       setPendingSync(false);
       setCloud(true);
       recordSynced();
+      setSyncError('');
      }
-    }catch{}
+    }catch(error){setSyncError(error instanceof Error?error.message:'Shared saving is temporarily unavailable.');}
    }
   };
   const handleOffline=()=>setOnline(false);
@@ -263,6 +268,7 @@ export default function TripApp(){
   localStorage.setItem(localStateKey,JSON.stringify(next));
   localStorage.setItem(pendingSyncKey,'true');
   setPendingSync(true);
+  setSyncError('');
   if(!navigator.onLine)return;
   try{
    const synced=await pushCloudState(next);
@@ -271,9 +277,11 @@ export default function TripApp(){
     setPendingSync(false);
     setCloud(true);
     recordSynced();
+    setSyncError('');
    }
-  }catch{}
+  }catch(error){setSyncError(error instanceof Error?error.message:'Shared saving is temporarily unavailable.');}
  }
+ async function retrySync(){if(state&&navigator.onLine)await persist(state);}
  function restoreTrip(restored:TripState){
   if(!state)return;
   localStorage.setItem(restoreRollbackKey,JSON.stringify(state));
@@ -763,10 +771,10 @@ export default function TripApp(){
  const completedTrip=tripProgress.filter(i=>i.done).length;
  const itineraryHoursIssues=state.days.flatMap(day=>day.items.map(item=>checkItineraryHours(item,day.date,state.places))).filter((check):check is ItineraryHoursCheck=>Boolean(check&&(check.status==='closed'||check.status==='closesSoon')));
 
- const syncLabel=!editorView?publicPreview?'● Previewing public view':'● Public view':!online?'● Offline · saved on this device':pendingSync?'○ Waiting to sync':cloud?'● Shared sync':'○ Device only';
+ const syncLabel=!editorView?publicPreview?'● Previewing public view':'● Public view':!online?'● Offline · saved on this device':syncError?'! Shared sync needs attention':pendingSync?'○ Waiting to sync':cloud?'● Shared sync':'○ Device only';
  const syncDetail=editorView&&lastSyncedAt&&!pendingSync&&online?`Saved ${new Date(lastSyncedAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}`:'';
  return <>
-  <header className={`hero theme-${tripSettings.coverTheme}`}><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>{tripSettings.title}</h1><p>{tripSettings.destinations} · {tripDateLabel(tripSettings.startDate,tripSettings.endDate)}</p></div><div className="headerActions"><span className={`sync syncStack ${editorView&&online&&cloud&&!pendingSync?'online':''} ${!online?'offline':''}`}><strong>{syncLabel}</strong>{syncDetail&&<small>{syncDetail}</small>}</span><button className="btn ghost" onClick={()=>{setShareMessage('');setShowSharePanel(true);}}>Share & access</button>{editorView&&<button className="btn ghost" onClick={()=>setTab('Settings')}>Settings</button>}<button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}{editorView?<button className="btn ghost" onClick={lockEditor}>Lock editing</button>:!isEditor&&<button className="btn ghost" onClick={()=>{setAuthError('');setShowEditorUnlock(true);}}>Editor access</button>}{offlineMessage&&<span className="offlineMessage" role="status">{offlineMessage}</span>}</div></div></header>
+  <header className={`hero theme-${tripSettings.coverTheme}`}><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>{tripSettings.title}</h1><p>{tripSettings.destinations} · {tripDateLabel(tripSettings.startDate,tripSettings.endDate)}</p></div><div className="headerActions"><span className={`sync syncStack ${editorView&&online&&cloud&&!pendingSync&&!syncError?'online':''} ${!online?'offline':''} ${syncError?'attention':''}`} title={syncError||undefined}><strong>{syncLabel}</strong>{syncDetail&&<small>{syncDetail}</small>}</span>{editorView&&syncError&&<button className="btn ghost syncRetry" onClick={()=>void retrySync()}>Retry sync</button>}<button className="btn ghost" onClick={()=>{setShareMessage('');setShowSharePanel(true);}}>Share & access</button>{editorView&&<button className="btn ghost" onClick={()=>setTab('Settings')}>Settings</button>}<button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}{editorView?<button className="btn ghost" onClick={lockEditor}>Lock editing</button>:!isEditor&&<button className="btn ghost" onClick={()=>{setAuthError('');setShowEditorUnlock(true);}}>Editor access</button>}{offlineMessage&&<span className="offlineMessage" role="status">{offlineMessage}</span>}{editorView&&syncError&&<span className="syncErrorMessage" role="alert">{syncError}</span>}</div></div></header>
   <main className={`shell ${editorView?'editorMode':'viewerMode'}`}>
    {!editorView&&<div className={`publicViewBanner ${publicPreview?'previewing':''}`}><span aria-hidden="true">◉</span><div><strong>{publicPreview?'Public preview':'Public view'}</strong><small>{publicPreview?'This is exactly what visitors see. Your editor session remains unlocked.':'Browse the trip and recap. Editing and private trip details are locked.'}</small></div>{publicPreview?<button className="textButton" onClick={exitPublicPreview}>Return to editor</button>:<button className="textButton" onClick={()=>setShowEditorUnlock(true)}>Unlock editing</button>}</div>}
    {!editorView&&tripSettings.publicMessage&&<section className="card publicWelcome"><div className="eyebrow">WELCOME TO OUR TRIP</div><p>{tripSettings.publicMessage}</p></section>}

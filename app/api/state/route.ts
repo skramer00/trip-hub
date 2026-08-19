@@ -61,6 +61,6 @@ export async function PUT(req:Request){
   return NextResponse.json({ok:true,cloud:saved});
  }catch(error){
   console.error('Trip state save failed; keeping device copy.',error);
-  return NextResponse.json({ok:false,cloud:false},{status:200});
+  return NextResponse.json({ok:false,cloud:false,error:'Shared saving is temporarily unavailable. Your changes remain on this device.'},{status:503});
  }
 }

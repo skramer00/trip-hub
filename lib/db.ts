@@ -1,11 +1,18 @@
 import {createClient} from '@supabase/supabase-js';
 import type {TripState} from './types';
 
-const SUPABASE_URL='https://eqkmhlimpcrbxfnqbmru.supabase.co';
-const SUPABASE_PUBLISHABLE_KEY='sb_publishable_EunOB6Ro5BIhPeAcE0JrHw_usx94FuG';
+const SUPABASE_URL=process.env.NEXT_PUBLIC_SUPABASE_URL??'https://eqkmhlimpcrbxfnqbmru.supabase.co';
+const LOCAL_PUBLISHABLE_KEY=process.env.SUPABASE_PUBLISHABLE_KEY??'sb_publishable_EunOB6Ro5BIhPeAcE0JrHw_usx94FuG';
+
+function databaseKey(){
+ const elevated=process.env.SUPABASE_SECRET_KEY??process.env.SUPABASE_SERVICE_ROLE_KEY;
+ if(elevated)return elevated;
+ if(process.env.NODE_ENV!=='production')return LOCAL_PUBLISHABLE_KEY;
+ throw new Error('Server database credential is not configured.');
+}
 
 export function db(){
-  return createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:false}});
+  return createClient(SUPABASE_URL,databaseKey(),{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
 }
 
 export async function loadState():Promise<TripState|null>{
