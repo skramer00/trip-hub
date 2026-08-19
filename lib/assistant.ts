@@ -1,5 +1,9 @@
-import type {ItineraryItem,ItineraryItemType,Place,TripDay,TripState,Weekday} from '@/lib/types';
+import type {CheckItem,ItineraryItem,ItineraryItemType,NearbyDietaryMode,Place,TripDay,TripState,Weekday} from '@/lib/types';
 import {suggestPlaceArea} from '@/lib/place-areas';
+import {placeWeatherSetting,weatherPreference} from '@/lib/weather';
+import type {DailyWeather} from '@/lib/weather';
+import {dietaryPreferenceLabel,dietaryRating,isFoodPlace} from '@/lib/dietary';
+import {placeSpecialtyFoods} from '@/lib/food-specialties';
 
 export type AssistantStatus='beforeTrip'|'relax'|'explore'|'leaveSoon'|'leaveNow'|'activity'|'finished';
 export type AssistantNoticeType='info'|'travel'|'timing';
@@ -30,6 +34,7 @@ export type SuggestionContext={
  location?:AssistantLocation;
  now?:Date;
  previewWallClock?:boolean;
+ weather?:DailyWeather;
 };
 
 export type NearbyFilters={
@@ -42,6 +47,9 @@ export type NearbyFilters={
  maxDistanceKm?:number;
  openNowOnly?:boolean;
  includeVisited?:boolean;
+ foodOnly?:boolean;
+ dietaryMode?:NearbyDietaryMode;
+ specialtyOnly?:boolean;
 };
 
 export interface AssistantNotice{
@@ -94,6 +102,16 @@ const CONTEXT_STOP_WORDS=new Set([
  'about','after','again','along','and','before','from','head','into','later','near','option',
  'then','there','this','through','toward','visit','with','your','toronto','niagara','buffalo','falls'
 ]);
+
+function dateKeyInTripTimeZone(date:Date){
+ const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date);
+ const values=Object.fromEntries(parts.map(part=>[part.type,part.value]));
+ return `${values.year}-${values.month}-${values.day}`;
+}
+
+export function foodsTriedOnDate(state:TripState,date:string):CheckItem[]{
+ return state.foods.filter(food=>food.triedAt&&dateKeyInTripTimeZone(new Date(food.triedAt))===date);
+}
 
 function localDateKey(date:Date){
  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
@@ -336,6 +354,15 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
  else {score+=5;reasons.push('A useful backup option');}
  if(place.recommendedDates?.includes(day.date)){score+=30;reasons.push('Recommended for this day');}
  if(placeMatchesDay(place,day)){score+=15;reasons.push(`Fits your ${day.city} plans`);}
+ const weatherFit=placeWeatherSetting(placeText(place));
+ const preference=weatherPreference(context.weather);
+ if(preference==='indoor'){
+  if(weatherFit==='indoor'){score+=28;reasons.push('A good indoor option for the forecast');}
+  if(weatherFit==='outdoor'){score-=24;reasons.push('Weather may make this outdoor stop less comfortable');}
+ }else if(preference==='outdoor'){
+  if(weatherFit==='outdoor'){score+=24;reasons.push('The forecast looks good for an outdoor stop');}
+  if(weatherFit==='indoor')score-=4;
+ }
  const anchorLocation=context.location??(placeHasCoordinates(context.anchorPlace)?{latitude:context.anchorPlace.latitude,longitude:context.anchorPlace.longitude,label:context.anchorPlace.name}:undefined);
  const anchorArea=context.anchorArea??(context.anchorPlace?(context.anchorPlace.area??suggestPlaceArea(context.anchorPlace)):undefined);
  const placeArea=place.area??suggestPlaceArea(place);
@@ -372,6 +399,43 @@ export function scoreSuggestion(place:Place,day:TripDay,availableMinutes:number,
  return {score,reasons,duration,distanceKm,walkingMinutes};
 }
 
+function applyDietaryScore(place:Place,state:TripState,day:TripDay,score:number,reasons:string[]){
+ const triedToday=foodsTriedOnDate(state,day.date);
+ const manualTreat=Boolean(state.mealBalanceByDate?.[day.date]?.treatSampled);
+ const favorSimpler=Boolean((manualTreat||triedToday.length)&&isFoodPlace(place));
+ let addedBalanceReason=false;
+ for(const preference of state.dietaryPreferences??[]){
+  const rating=dietaryRating(place,preference);
+  if(!rating)continue;
+  const label=dietaryPreferenceLabel(preference);
+  if(rating.fit==='easy'){score+=34;reasons.push(`${label}: easy fit`);}
+  else if(rating.fit==='workable'){score+=18;reasons.push(`${label}: workable with adjustments`);}
+  else if(rating.fit==='difficult'){score-=28;reasons.push(`${label}: likely harder to modify`);}
+  if(favorSimpler&&rating.fit==='easy'){
+   score+=28;
+   if(!addedBalanceReason){reasons.unshift(triedToday.length?`An easier option after trying ${triedToday.slice(0,2).map(food=>food.title).join(' + ')} today`:'A simpler option after today’s treat');addedBalanceReason=true;}
+  }else if(favorSimpler&&rating.fit==='workable'){
+   score+=14;
+   if(!addedBalanceReason){reasons.unshift(triedToday.length?`A workable next meal after trying ${triedToday.slice(0,2).map(food=>food.title).join(' + ')} today`:'A workable next-meal option after today’s treat');addedBalanceReason=true;}
+  }
+  if(rating.tip)reasons.push(`Best bet: ${rating.tip}`);
+ }
+ return score;
+}
+
+function applySpecialtyScore(place:Place,state:TripState,score:number,reasons:string[],specialtyMode=false){
+ const specialties=placeSpecialtyFoods(place,state.foods);
+ if(!specialties.length)return score;
+ const untried=specialties.filter(food=>!food.done);
+ if(untried.length){
+  score+=specialtyMode?52:34;
+  reasons.unshift(`${untried.slice(0,2).map(food=>food.title).join(' + ')} ${untried.length===1?'is':'are'} still on your food list`);
+ }else{
+  score+=specialtyMode?8:0;
+ }
+ return score;
+}
+
 export function findSuggestionCandidates(state:TripState,day:TripDay,availableMinutes:number,limit=3,context:SuggestionContext={}):SuggestedPlace[]{
  const anchorPlace=context.anchorPlace??placeForItem(state,context.anchor);
  const scoredContext={...context,anchorPlace};
@@ -379,6 +443,8 @@ export function findSuggestionCandidates(state:TripState,day:TripDay,availableMi
   .filter(place=>!place.visited&&place.id!==anchorPlace?.id&&placeMatchesDay(place,day))
   .map(place=>{
    const result=scoreSuggestion(place,day,availableMinutes,scoredContext);
+   result.score=applyDietaryScore(place,state,day,result.score,result.reasons);
+   result.score=applySpecialtyScore(place,state,result.score,result.reasons);
    return {place,score:result.score,reasons:result.reasons,reason:result.reasons.join(' • '),estimatedDuration:result.duration,distanceKm:result.distanceKm,walkingMinutes:result.walkingMinutes};
   })
   .filter(item=>item.score>0&&item.estimatedDuration<=Math.max(availableMinutes,30))
@@ -412,12 +478,21 @@ export function findNearbyPlaces(
  const availableMinutes=filters.availableMinutes??180;
  const needle=filters.query?.trim().toLowerCase()??'';
  return state.places
-  .filter(place=>{
+ .filter(place=>{
+   if(filters.foodOnly&&!isFoodPlace(place))return false;
+   if(filters.specialtyOnly&&!placeSpecialtyFoods(place,state.foods).length)return false;
    if(!filters.includeVisited&&place.visited)return false;
    if(filters.region&&filters.region!=='All'&&place.region!==filters.region)return false;
    if(filters.area&&filters.area!=='All'&&(place.area??suggestPlaceArea(place))!==filters.area)return false;
    if(filters.category&&filters.category!=='All'&&place.category!==filters.category)return false;
    if(filters.priority&&filters.priority!=='All'&&place.priority!==filters.priority)return false;
+   if(filters.dietaryMode&&filters.dietaryMode!=='all'&&(state.dietaryPreferences?.length??0)>0){
+    const ratings=(state.dietaryPreferences??[]).map(preference=>dietaryRating(place,preference));
+    if(filters.dietaryMode==='easier-or-unknown'&&ratings.some(rating=>rating?.fit==='difficult'))return false;
+    if(filters.dietaryMode==='easier'&&!ratings.every(rating=>rating&&['easy','workable'].includes(rating.fit)))return false;
+    if(filters.dietaryMode==='easy'&&!ratings.every(rating=>rating?.fit==='easy'))return false;
+    if(filters.dietaryMode==='difficult'&&!ratings.some(rating=>rating?.fit==='difficult'))return false;
+   }
    if(needle&&!placeText(place).includes(needle))return false;
    const open=placeOpenStatus(place,now);
    if(filters.openNowOnly&&!['open','ignored'].includes(open.status))return false;
@@ -428,6 +503,8 @@ export function findNearbyPlaces(
     location,
     anchorArea:filters.area&&filters.area!=='All'?filters.area:undefined
    });
+   result.score=applyDietaryScore(place,state,day,result.score,result.reasons);
+   result.score=applySpecialtyScore(place,state,result.score,result.reasons,filters.specialtyOnly);
    const distanceKm=location&&placeHasCoordinates(place)?distanceBetweenCoordinates(location,place):undefined;
    return {
     place,
@@ -444,13 +521,7 @@ export function findNearbyPlaces(
    if(filters.maxDistanceKm!==undefined&&suggestion.distanceKm!==undefined&&suggestion.distanceKm>filters.maxDistanceKm)return false;
    return true;
   })
-  .sort((a,b)=>{
-   if(location){
-    const distance=(a.distanceKm??Number.POSITIVE_INFINITY)-(b.distanceKm??Number.POSITIVE_INFINITY);
-    if(distance!==0)return distance;
-   }
-   return b.score-a.score||a.estimatedDuration-b.estimatedDuration||a.place.name.localeCompare(b.place.name);
-  })
+  .sort((a,b)=>b.score-a.score||(a.distanceKm??Number.POSITIVE_INFINITY)-(b.distanceKm??Number.POSITIVE_INFINITY)||a.estimatedDuration-b.estimatedDuration||a.place.name.localeCompare(b.place.name))
   .slice(0,limit);
 }
 

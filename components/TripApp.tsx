@@ -1,7 +1,9 @@
 'use client';
 
+import Image from 'next/image';
 import {useEffect,useMemo,useState} from 'react';
-import {buildAssistantState,estimatedItemDuration,findNearbyPlaces,findSuggestionCandidates,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
+import type {FormEvent} from 'react';
+import {buildAssistantState,estimatedItemDuration,findNearbyPlaces,findSuggestionCandidates,foodsTriedOnDate,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
 import {checkItineraryHours} from '@/lib/place-hours';
 import {areaOptions,suggestedAreaNames,suggestPlaceArea} from '@/lib/place-areas';
 import {analyzeDayRoute,boardPlace,buildGoogleMapsDayRoute,dayRouteStops,placeArea,routeOrderChanged,suggestDayOrder} from '@/lib/board-planner';
@@ -12,16 +14,28 @@ import {deleteReservationAttachment,listReservationAttachments,saveReservationAt
 import type {ReservationAttachment} from '@/lib/attachments';
 import type {ItineraryHoursCheck} from '@/lib/place-hours';
 import type {AssistantLocation,AssistantState,SuggestedPlace} from '@/lib/assistant';
-import type {GooglePlaceCandidate,ItineraryItem,Place,TripState,Weekday} from '@/lib/types';
+import type {CheckItem,GooglePlaceCandidate,ItineraryItem,JournalMoment,JournalMomentType,NearbyDietaryMode,NearbyPreset,Place,TripState,Weekday} from '@/lib/types';
+import type {DietaryFit,DietaryPreference} from '@/lib/types';
+import {dietaryFitLabel,dietaryFits,dietaryPreferenceLabel,dietaryPreferences,dietaryRating,isFoodPlace,setDietaryRating} from '@/lib/dietary';
+import {placeSpecialtyFoodIds,placeSpecialtyFoods} from '@/lib/food-specialties';
+import {weatherNotice,weatherPackingReminders,weatherPreference} from '@/lib/weather';
+import {publicTripState} from '@/lib/public-state';
+import type {WeatherResponse} from '@/lib/weather';
+import DietaryReview from '@/components/DietaryReview';
 
-const tabs=['Today','Assistant','Nearby','Board','Itinerary','Locations','Reservations','Food','Places','Hours','Checklist'] as const;
+const tabs=['Today','Assistant','Journal','Nearby','Board','Itinerary','Locations','Reservations','Food','Dietary','Places','Hours','Checklist'] as const;
 type Tab=(typeof tabs)[number];
 const navGroups=[
- {label:'Today',tabs:['Today','Assistant'] as Tab[]},
+ {label:'Today',tabs:['Today','Assistant','Journal'] as Tab[]},
  {label:'Plan',tabs:['Board','Itinerary','Locations','Reservations'] as Tab[]},
  {label:'Explore',tabs:['Nearby','Places','Hours'] as Tab[]},
- {label:'Food',tabs:['Food'] as Tab[]},
+ {label:'Food',tabs:['Food','Dietary'] as Tab[]},
  {label:'Checklist',tabs:['Checklist'] as Tab[]}
+] as const;
+const publicNavGroups=[
+ {label:'Today',tabs:['Today','Assistant','Journal'] as Tab[]},
+ {label:'Explore',tabs:['Nearby','Places'] as Tab[]},
+ {label:'Food',tabs:['Food'] as Tab[]}
 ] as const;
 type InstallPromptEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
 type AssistantPreview={date:string;time:string;area:string};
@@ -32,6 +46,7 @@ const localStateKey='trip-state';
 const pendingSyncKey='trip-state-pending-sync';
 const offlineReadyKey='trip-offline-ready-v2';
 const boardHiddenDaysKey='trip-board-hidden-days-v1';
+const editorSessionKey='trip-editor-session-v1';
 
 function readLocalState(){
  try{
@@ -98,6 +113,8 @@ export default function TripApp(){
  const [area,setArea]=useState('All');
  const [category,setCategory]=useState('All');
  const [priority,setPriority]=useState('All');
+ const [dietFilter,setDietFilter]=useState<'All'|DietaryPreference>('All');
+ const [dietFitFilter,setDietFitFilter]=useState<'All'|DietaryFit>('All');
  const [showVisited,setShowVisited]=useState(true);
  const [now,setNow]=useState(()=>new Date());
  const [online,setOnline]=useState(()=>typeof navigator==='undefined'||navigator.onLine);
@@ -112,22 +129,37 @@ export default function TripApp(){
  const [locationStatus,setLocationStatus]=useState<'idle'|'requesting'|'active'|'error'>('idle');
  const [locationMessage,setLocationMessage]=useState('');
  const [assistantPreview,setAssistantPreview]=useState<AssistantPreview|null>(null);
+ const [isEditor,setIsEditor]=useState(false);
+ const [authReady,setAuthReady]=useState(false);
+ const [showEditorUnlock,setShowEditorUnlock]=useState(false);
+ const [editorPin,setEditorPin]=useState('');
+ const [authError,setAuthError]=useState('');
+ const [authBusy,setAuthBusy]=useState(false);
+ const [showSharePanel,setShowSharePanel]=useState(false);
+ const [publicPreview,setPublicPreview]=useState(false);
+ const [publicUrl,setPublicUrl]=useState('');
+ const [qrCode,setQrCode]=useState('');
+ const [shareMessage,setShareMessage]=useState('');
 
  useEffect(()=>{
   let active=true;
-  const local=readLocalState();
   const hasPending=localStorage.getItem(pendingSyncKey)==='true';
-  setPendingSync(hasPending);
   setOfflineReady(localStorage.getItem(offlineReadyKey)==='true');
   void fetch('/api/state').then(async response=>{
    if(!response.ok)throw new Error('Trip state unavailable');
    const result=await response.json();
    if(!active)return;
-   const selected=hasPending&&local?local:result.state;
+   const editor=Boolean(result.editor);
+   const local=editor?readLocalState():null;
+   const selected=editor&&hasPending&&local?local:result.state;
+   setIsEditor(editor);
+   if(editor)localStorage.setItem(editorSessionKey,'true');else localStorage.removeItem(editorSessionKey);
+   setAuthReady(true);
+   setPendingSync(editor&&hasPending);
    setState(selected);
    setCloud(Boolean(result.cloud));
-   localStorage.setItem(localStateKey,JSON.stringify(selected));
-   if(hasPending&&local&&navigator.onLine){
+   if(editor)localStorage.setItem(localStateKey,JSON.stringify(selected));
+   if(editor&&hasPending&&local&&navigator.onLine){
     const synced=await pushCloudState(local);
     if(active&&synced){
      localStorage.removeItem(pendingSyncKey);
@@ -136,7 +168,10 @@ export default function TripApp(){
     }
    }
   }).catch(()=>{
-   if(active&&local)setState(local);
+   if(!active)return;
+   const local=readLocalState();
+   if(localStorage.getItem(editorSessionKey)==='true'&&local){setState(local);setIsEditor(true);setPendingSync(hasPending);}
+   setAuthReady(true);
   });
   return()=>{active=false;};
  },[]);
@@ -161,6 +196,7 @@ export default function TripApp(){
  useEffect(()=>{
   const handleOnline=async()=>{
    setOnline(true);
+   if(!isEditor)return;
    const local=readLocalState();
    if(localStorage.getItem(pendingSyncKey)==='true'&&local){
     try{
@@ -186,9 +222,17 @@ export default function TripApp(){
    window.removeEventListener('offline',handleOffline);
    window.removeEventListener('beforeinstallprompt',handleInstall);
   };
- },[]);
+ },[isEditor]);
  useEffect(()=>{const timer=window.setInterval(()=>setNow(new Date()),60000);return()=>window.clearInterval(timer);},[]);
+ useEffect(()=>{setPublicUrl(window.location.origin);},[]);
+ useEffect(()=>{
+  if(!showSharePanel||!publicUrl)return;
+  let active=true;
+  void import('qrcode').then(({default:QRCode})=>QRCode.toDataURL(publicUrl,{width:360,margin:2,color:{dark:'#123f2d',light:'#ffffff'}})).then(value=>{if(active)setQrCode(value);}).catch(()=>{if(active)setQrCode('');});
+  return()=>{active=false;};
+ },[publicUrl,showSharePanel]);
  async function persist(next:TripState){
+  if(!isEditor)return;
   setState(next);
   localStorage.setItem(localStateKey,JSON.stringify(next));
   localStorage.setItem(pendingSyncKey,'true');
@@ -202,6 +246,61 @@ export default function TripApp(){
     setCloud(true);
    }
   }catch{}
+ }
+ async function loadTripState(){
+  const response=await fetch('/api/state',{cache:'no-store'});
+  if(!response.ok)throw new Error('Trip state unavailable');
+  const result=await response.json();
+  setState(result.state);
+  setCloud(Boolean(result.cloud));
+  setIsEditor(Boolean(result.editor));
+  return result;
+ }
+ async function unlockEditor(event:FormEvent<HTMLFormElement>){
+  event.preventDefault();
+  setAuthBusy(true);setAuthError('');
+  try{
+   const response=await fetch('/api/auth',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:editorPin})});
+   const result=await response.json();
+   if(!response.ok)throw new Error(result.error??'Editor access failed');
+   const loaded=await loadTripState();
+   localStorage.setItem(editorSessionKey,'true');
+   localStorage.setItem(localStateKey,JSON.stringify(loaded.state));
+   localStorage.removeItem(pendingSyncKey);
+   setPendingSync(false);setEditorPin('');setShowEditorUnlock(false);setTab('Today');
+  }catch(error){setAuthError(error instanceof Error?error.message:'Editor access failed');}
+  finally{setAuthBusy(false);}
+ }
+ async function lockEditor(){
+  await fetch('/api/auth',{method:'DELETE'});
+  localStorage.removeItem(editorSessionKey);
+  localStorage.removeItem(pendingSyncKey);
+  setPendingSync(false);setPublicPreview(false);setShowSharePanel(false);setTab('Today');
+  await loadTripState();
+ }
+ async function copyPublicLink(){
+  if(!publicUrl)return;
+  try{await navigator.clipboard.writeText(publicUrl);setShareMessage('Public link copied.');}
+  catch{setShareMessage('Copy the link shown below.');}
+ }
+ async function sharePublicLink(){
+  if(!publicUrl)return;
+  if(navigator.share){
+   try{await navigator.share({title:'Toronto · Niagara · Buffalo',text:'Follow our Toronto, Niagara Falls, and Buffalo trip.',url:publicUrl});setShareMessage('Share sheet opened.');return;}catch{}
+  }
+  await copyPublicLink();
+ }
+ function enterPublicPreview(){
+  if(!state)return;
+  setState(publicTripState(state));
+  setPublicPreview(true);
+  setShowSharePanel(false);
+  setTab('Today');
+ }
+ async function exitPublicPreview(){
+  setPublicPreview(false);
+  await loadTripState();
+  setTab('Today');
  }
  async function downloadOffline(){
   if(!('serviceWorker'in navigator))return;
@@ -238,8 +337,8 @@ export default function TripApp(){
   setLocationStatus('idle');
   setLocationMessage('');
  }
- function toggleDay(di:number,ii:number){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];item.done=!item.done;if(item.done)item.skipped=false;void persist(next);}
- function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='skipped'||key==='fixed'||key==='locationNotNeeded')item[key]=Boolean(value);else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
+ function toggleDay(di:number,ii:number){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];item.done=!item.done;if(item.done){item.completedAt=new Date().toISOString();item.skipped=false;delete item.skippedAt;}else delete item.completedAt;void persist(next);}
+ function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='fixed'||key==='locationNotNeeded')item[key]=Boolean(value);else if(key==='skipped'){item.skipped=Boolean(value);if(item.skipped)item.skippedAt??=new Date().toISOString();else delete item.skippedAt;}else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
  function saveEdits(di?:number){const latest=readLocalState()??state;if(!latest)return;const next=structuredClone(latest);if(di!==undefined)next.days[di].items=sortItems(next.days[di].items);void persist(next);}
  function addItem(di:number){if(!state)return;const next=structuredClone(state);next.days[di].items.push({id:`custom-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:'12:00 PM',title:'New stop',details:'',destination:'',routeText:'',keyInfo:'',userNotes:'',done:false,optional:false,fixed:false,type:'activity',estimatedDuration:60,travelMinutes:20,prepBuffer:15});next.days[di].items=sortItems(next.days[di].items);void persist(next);}
  function addPlaceToItinerary(place:Place,di:number,optional=false){
@@ -275,15 +374,19 @@ export default function TripApp(){
   const item=next.days[di]?.items.find(candidate=>candidate.id===itemId);
   if(!item)return;
   item.skipped=true;
+  item.skippedAt=new Date().toISOString();
+  item.done=false;
+  delete item.completedAt;
   void persist(next);
  }
  function deleteItem(di:number,ii:number){if(!state||!window.confirm(`Delete “${state.days[di].items[ii].title}”?`))return;const next=structuredClone(state);next.days[di].items.splice(ii,1);void persist(next);}
- function moveItem(di:number,ii:number,target:number){if(!state||target===di)return;const next=structuredClone(state);const [item]=next.days[di].items.splice(ii,1);next.days[target].items.push(item);next.days[target].items=sortItems(next.days[target].items);void persist(next);}
+ function moveItem(di:number,ii:number,target:number){if(!state||target===di)return;const next=structuredClone(state);const [item]=next.days[di].items.splice(ii,1);item.lastRescheduledAt=new Date().toISOString();item.rescheduledFromDate=next.days[di].date;next.days[target].items.push(item);next.days[target].items=sortItems(next.days[target].items);void persist(next);}
  function reorderItem(di:number,ii:number,direction:-1|1){if(!state)return;const target=ii+direction;if(target<0||target>=state.days[di].items.length)return;const next=structuredClone(state);[next.days[di].items[ii],next.days[di].items[target]]=[next.days[di].items[target],next.days[di].items[ii]];void persist(next);}
  function moveBoardItem(fromDay:number,fromIndex:number,toDay:number,toIndex:number){
   if(!state)return;
   const next=structuredClone(state);
   const [item]=next.days[fromDay].items.splice(fromIndex,1);
+  if(fromDay!==toDay){item.lastRescheduledAt=new Date().toISOString();item.rescheduledFromDate=next.days[fromDay].date;}
   const adjustedIndex=fromDay===toDay&&fromIndex<toIndex?toIndex-1:toIndex;
   next.days[toDay].items.splice(Math.max(0,Math.min(adjustedIndex,next.days[toDay].items.length)),0,item);
   setBoardUndo(structuredClone(state));
@@ -296,6 +399,10 @@ export default function TripApp(){
   copy.id=`copy-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
   copy.title=`${copy.title} (copy)`;
   copy.done=false;
+  delete copy.completedAt;
+  delete copy.skippedAt;
+  delete copy.lastRescheduledAt;
+  delete copy.rescheduledFromDate;
   next.days[di].items.splice(ii+1,0,copy);
   setBoardUndo(structuredClone(state));
   void persist(next);
@@ -325,8 +432,72 @@ export default function TripApp(){
   setBoardUndo(structuredClone(state));
   void persist(previous);
  }
- function toggleList(key:'foods'|'packing',index:number){if(!state)return;const next=structuredClone(state);next[key][index].done=!next[key][index].done;void persist(next);}
- function toggleVisited(id:string){if(!state)return;const next=structuredClone(state);const place=next.places.find(p=>p.id===id);if(place)place.visited=!place.visited;void persist(next);}
+ function toggleList(key:'foods'|'packing',index:number){if(!state)return;const next=structuredClone(state);next[key][index].done=!next[key][index].done;if(key==='foods'){const food=next.foods[index];if(food.done)food.triedAt=new Date().toISOString();else{delete food.triedAt;delete food.triedAtPlaceId;}}void persist(next);}
+ function markFoodTried(foodId:string,placeId?:string,done=true){
+  if(!state)return;
+  const next=structuredClone(state);
+  const food=next.foods.find(item=>item.id===foodId);
+  if(!food)return;
+  food.done=done;
+  if(done){food.triedAt=new Date().toISOString();food.triedAtPlaceId=placeId;}
+  else{delete food.triedAt;delete food.triedAtPlaceId;}
+  void persist(next);
+ }
+ function updateFoodPlaceConnection(placeId:string,foodId:string,linked:boolean){
+  if(!state)return;
+  const next=structuredClone(state);
+  const place=next.places.find(item=>item.id===placeId);
+  if(!place)return;
+  const ids=new Set(placeSpecialtyFoodIds(place,next.foods));
+  if(linked)ids.add(foodId);else ids.delete(foodId);
+  place.specialtyFoodIds=[...ids];
+  void persist(next);
+ }
+ function toggleTripDiet(preference:DietaryPreference){if(!state)return;const next=structuredClone(state);const selected=new Set(next.dietaryPreferences??[]);if(selected.has(preference))selected.delete(preference);else selected.add(preference);next.dietaryPreferences=[...selected];void persist(next);}
+ function updateMealBalance(date:string,changes:{treatSampled?:boolean;note?:string},saveNow=false){
+  if(!state)return;
+  const next=structuredClone(state);
+  next.mealBalanceByDate??={};
+  const current=next.mealBalanceByDate[date]??{treatSampled:false};
+  next.mealBalanceByDate[date]={...current,...changes};
+  setState(next);
+  localStorage.setItem(localStateKey,JSON.stringify(next));
+  if(saveNow)void persist(next);
+ }
+ function toggleVisited(id:string){if(!state)return;const next=structuredClone(state);const place=next.places.find(p=>p.id===id);if(place){place.visited=!place.visited;if(place.visited)place.visitedAt=new Date().toISOString();else delete place.visitedAt;}void persist(next);}
+ function updateJournalNote(date:string,note:string,saveNow=false){
+  if(!state)return;
+  const next=structuredClone(state);
+  next.journalNotesByDate??={};
+  next.journalNotesByDate[date]=note;
+  setState(next);
+  localStorage.setItem(localStateKey,JSON.stringify(next));
+  if(saveNow)void persist(next);
+ }
+ function saveJournalMoment(moment:JournalMoment){
+  if(!state)return;
+  const next=structuredClone(state);
+  next.journalMoments??=[];
+  const index=next.journalMoments.findIndex(item=>item.id===moment.id);
+  const previous=index>=0?next.journalMoments[index]:undefined;
+  if(previous?.foodId&&(previous.foodId!==moment.foodId||moment.type!=='food')){
+   const previousFood=next.foods.find(food=>food.id===previous.foodId);
+   const stillLinked=next.journalMoments.some(item=>item.id!==previous.id&&item.foodId===previous.foodId);
+   if(previousFood?.triedAt===journalMomentTimestamp(previous)&&!stillLinked){previousFood.done=false;delete previousFood.triedAt;delete previousFood.triedAtPlaceId;}
+  }
+  if(index>=0)next.journalMoments[index]={...moment,updatedAt:new Date().toISOString()};
+  else next.journalMoments.push(moment);
+  if(moment.type==='food'&&moment.foodId){const food=next.foods.find(item=>item.id===moment.foodId);if(food){food.done=true;food.triedAt=journalMomentTimestamp(moment);food.triedAtPlaceId=moment.placeId;}}
+  void persist(next);
+ }
+ function deleteJournalMoment(id:string){
+  if(!state)return;
+  const next=structuredClone(state);
+  const removed=(next.journalMoments??[]).find(moment=>moment.id===id);
+  next.journalMoments=(next.journalMoments??[]).filter(moment=>moment.id!==id);
+  if(removed?.foodId){const food=next.foods.find(item=>item.id===removed.foodId);const stillLinked=next.journalMoments.some(moment=>moment.foodId===removed.foodId);if(food?.triedAt===journalMomentTimestamp(removed)&&!stillLinked){food.done=false;delete food.triedAt;delete food.triedAtPlaceId;}}
+  void persist(next);
+ }
  function editPlace(id:string,changes:Partial<Place>){
   if(!state)return;
   const next=structuredClone(state);
@@ -335,6 +506,13 @@ export default function TripApp(){
   Object.assign(place,changes);
   setState(next);
   localStorage.setItem(localStateKey,JSON.stringify(next));
+ }
+ function editPlaces(updates:{id:string;changes:Partial<Place>}[]){
+  if(!state||!updates.length)return;
+  const next=structuredClone(state);
+  const changesById=new Map(updates.map(update=>[update.id,update.changes]));
+  next.places.forEach(place=>{const changes=changesById.get(place.id);if(changes)Object.assign(place,changes);});
+  void persist(next);
  }
  function replacePlace(updated:Place){
   if(!state)return;
@@ -378,6 +556,29 @@ export default function TripApp(){
   localStorage.setItem(localStateKey,JSON.stringify(next));
  }
  function savePlaceChanges(){const latest=readLocalState()??state;if(latest)void persist(structuredClone(latest));}
+ function saveNearbyPreset(preset:NearbyPreset){
+  if(!state)return;
+  const next=structuredClone(state);
+  next.nearbyPresets??=[];
+  const index=next.nearbyPresets.findIndex(item=>item.id===preset.id);
+  if(index>=0)next.nearbyPresets[index]=preset;
+  else next.nearbyPresets.push(preset);
+  void persist(next);
+ }
+ function deleteNearbyPreset(id:string){
+  if(!state)return;
+  const next=structuredClone(state);
+  next.nearbyPresets=(next.nearbyPresets??[]).filter(item=>item.id!==id);
+  if(next.defaultNearbyPresetId===id)delete next.defaultNearbyPresetId;
+  void persist(next);
+ }
+ function setDefaultNearbyPreset(id?:string){
+  if(!state)return;
+  const next=structuredClone(state);
+  if(id)next.defaultNearbyPresetId=id;
+  else delete next.defaultNearbyPresetId;
+  void persist(next);
+ }
  function addPlace(){
   if(!state)return;
   const next=structuredClone(state);
@@ -498,39 +699,44 @@ export default function TripApp(){
  const availableAreas=useMemo(()=>areaOptions(state?.places??[]),[state]);
  const unassignedAreaCount=state?.places.filter(place=>!place.area).length??0;
  const suggestibleAreaCount=state?.places.filter(place=>!place.area&&Boolean(suggestPlaceArea(place))).length??0;
- const filtered=useMemo(()=>{if(!state)return[];const needle=query.trim().toLowerCase();return state.places.filter(place=>(region==='All'||place.region===region)&&(area==='All'||(area==='Unassigned'?!place.area:place.area===area))&&(category==='All'||place.category===category)&&(priority==='All'||place.priority===priority)&&(showVisited||!place.visited)&&(!needle||`${place.name} ${place.area??''} ${place.notes} ${place.tags.join(' ')}`.toLowerCase().includes(needle)));},[state,query,region,area,category,priority,showVisited]);
+ const filtered=useMemo(()=>{if(!state)return[];const needle=query.trim().toLowerCase();return state.places.filter(place=>{const rating=dietFilter==='All'?undefined:dietaryRating(place,dietFilter);const dietMatches=dietFilter==='All'||dietFitFilter==='All'||(dietFitFilter==='unknown'?!rating||rating.fit==='unknown':rating?.fit===dietFitFilter);return (region==='All'||place.region===region)&&(area==='All'||(area==='Unassigned'?!place.area:place.area===area))&&(category==='All'||place.category===category)&&(priority==='All'||place.priority===priority)&&dietMatches&&(showVisited||!place.visited)&&(!needle||`${place.name} ${place.area??''} ${place.notes} ${place.tags.join(' ')}`.toLowerCase().includes(needle));});},[state,query,region,area,category,priority,dietFilter,dietFitFilter,showVisited]);
  const nearbySuggestions=useMemo(()=>{if(!state||!currentDay)return[];const rank={must:0,possible:1,backup:2};return state.places.filter(place=>placeMatchesDay(place,currentDay.city,currentDay.date)&&!place.visited).sort((a,b)=>rank[a.priority]-rank[b.priority]).slice(0,6);},[state,currentDay]);
  const assistantNow=useMemo(()=>previewMoment(assistantPreview,now),[assistantPreview,now]);
  const assistantLocation=assistantPreview?.area?undefined:liveLocation??undefined;
  const assistant=useMemo(()=>state?buildAssistantState(state,assistantNow,assistantLocation,assistantPreview?.area||undefined,Boolean(assistantPreview)):null,[assistantLocation,assistantNow,assistantPreview,state]);
  const reservations=useMemo(()=>state?state.days.flatMap(day=>day.items.flatMap(item=>isFixedItem(item)?[{day,item}]:[])):[],[state]);
  const readiness=useMemo(()=>state?buildTripReadiness(state):null,[state]);
- const activeNavGroup=navGroups.find(group=>group.tabs.includes(tab))??navGroups[0];
+ const editorView=isEditor&&!publicPreview;
+ const visibleNavGroups=editorView?navGroups:publicNavGroups;
+ const activeNavGroup=visibleNavGroups.find(group=>(group.tabs as readonly Tab[]).includes(tab))??visibleNavGroups[0];
 
- if(!state)return <main className="shell"><div className="card">Loading trip…</div></main>;
+ if(!state)return <main className="shell"><div className="card">{authReady?'Trip unavailable. Check your connection and refresh.':'Loading trip…'}</div></main>;
  const completedToday=currentDay?.items.filter(i=>i.done).length??0;
  const totalToday=currentDay?.items.length??0;
  const tripProgress=state.days.flatMap(day=>day.items);
  const completedTrip=tripProgress.filter(i=>i.done).length;
  const itineraryHoursIssues=state.days.flatMap(day=>day.items.map(item=>checkItineraryHours(item,day.date,state.places))).filter((check):check is ItineraryHoursCheck=>Boolean(check&&(check.status==='closed'||check.status==='closesSoon')));
 
- const syncLabel=!online?'● Offline · changes save here':pendingSync?'○ Waiting to sync':cloud?'● Shared sync':'○ Device only';
+ const syncLabel=!editorView?publicPreview?'● Previewing public view':'● Public view':!online?'● Offline · changes save here':pendingSync?'○ Waiting to sync':cloud?'● Shared sync':'○ Device only';
  return <>
-  <header className="hero"><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>Toronto · Niagara · Buffalo</h1><p>September 24–October 1, 2026</p></div><div className="headerActions"><span className={`sync ${online&&cloud&&!pendingSync?'online':''} ${!online?'offline':''}`}>{syncLabel}</span><button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}{offlineMessage&&<span className="offlineMessage" role="status">{offlineMessage}</span>}</div></div></header>
-  <main className="shell">
-   <nav className="tabs mainTabs" aria-label="Trip sections">{navGroups.map(group=><button key={group.label} className={activeNavGroup.label===group.label?'active':''} onClick={()=>setTab(group.tabs[0])}>{group.label}</button>)}</nav>
+  <header className="hero"><div className="heroInner"><div><div className="eyebrow">TRIP HUB</div><h1>Toronto · Niagara · Buffalo</h1><p>September 24–October 1, 2026</p></div><div className="headerActions"><span className={`sync ${editorView&&online&&cloud&&!pendingSync?'online':''} ${!online?'offline':''}`}>{syncLabel}</span><button className="btn ghost" onClick={()=>{setShareMessage('');setShowSharePanel(true);}}>Share & access</button><button className="btn ghost" onClick={downloadOffline} disabled={offlineDownloading}>{offlineDownloading?'Downloading…':offlineReady?'✓ Offline ready':'Download for offline'}</button>{installPrompt&&<button className="btn ghost" onClick={installApp}>Install app</button>}{editorView?<button className="btn ghost" onClick={lockEditor}>Lock editing</button>:!isEditor&&<button className="btn ghost" onClick={()=>{setAuthError('');setShowEditorUnlock(true);}}>Editor access</button>}{offlineMessage&&<span className="offlineMessage" role="status">{offlineMessage}</span>}</div></div></header>
+  <main className={`shell ${editorView?'editorMode':'viewerMode'}`}>
+   {!editorView&&<div className={`publicViewBanner ${publicPreview?'previewing':''}`}><span aria-hidden="true">◉</span><div><strong>{publicPreview?'Public preview':'Public view'}</strong><small>{publicPreview?'This is exactly what visitors see. Your editor session remains unlocked.':'Browse the trip and recap. Editing and private trip details are locked.'}</small></div>{publicPreview?<button className="textButton" onClick={exitPublicPreview}>Return to editor</button>:<button className="textButton" onClick={()=>setShowEditorUnlock(true)}>Unlock editing</button>}</div>}
+   <nav className="tabs mainTabs" aria-label="Trip sections">{visibleNavGroups.map(group=><button key={group.label} className={activeNavGroup.label===group.label?'active':''} onClick={()=>setTab(group.tabs[0])}>{group.label}</button>)}</nav>
    {activeNavGroup.tabs.length>1&&<nav className="subTabs" aria-label={`${activeNavGroup.label} views`}>{activeNavGroup.tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item==='Places'?'Saved Places':item}</button>)}</nav>}
    {tab==='Today'&&currentDay&&<section>
    <div className="todayHero card"><div><div className="eyebrow">TODAY</div><h2>{currentDay.label} · {currentDay.city}</h2><p className="muted">Recommendations below are selected for this specific itinerary day.</p></div><div className="progressRing" aria-label={`${completedToday} of ${totalToday} complete`}><strong>{completedToday}/{totalToday}</strong><span>done</span></div></div>
-    {readiness&&<TripReadinessDashboard readiness={readiness} onOpen={target=>setTab(target)}/>}
-    {nextStep?<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><div className="between" style={{alignItems:'flex-start',gap:'16px',marginTop:'6px'}}><div><h2 style={{marginBottom:'4px'}}>{nextStep.title}</h2><div className="muted">{nextStep.time}</div>{nextStep.details&&<p>{nextStep.details}</p>}{nextStep.routeText&&<p className="muted small">🚌 {nextStep.routeText}</p>}{(nextStep.keyInfo||nextStep.confirmationNumber)&&<div style={{marginTop:'12px'}}><strong>Key Info</strong><p style={{whiteSpace:'pre-wrap',marginTop:'4px'}}>{nextStep.keyInfo??nextStep.confirmationNumber}</p></div>}</div><span className="chip">{nextStepIndex+1} of {currentDay.items.length}</span></div><div className="placeActions" style={{marginTop:'14px'}}>{nextStep.mapUrl&&<a className="btn primary" href={nextStep.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}<button className="btn" onClick={()=>toggleDay(currentDayIndex,nextStepIndex)}>Mark complete</button></div></div>:<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><h2 style={{marginTop:'6px'}}>You’re done for today</h2><p className="muted">Every itinerary item for this day is complete.</p></div>}
+    {editorView&&<MealBalanceCard date={currentDay.date} value={state.mealBalanceByDate?.[currentDay.date]} triedFoods={foodsTriedOnDate(state,currentDay.date)} onChange={updateMealBalance}/>}
+    {editorView&&<QuickCapture date={currentDay.date} places={state.places} foods={state.foods} onSave={saveJournalMoment} onDelete={deleteJournalMoment}/>}
+    {editorView&&readiness&&<TripReadinessDashboard readiness={readiness} onOpen={target=>setTab(target)}/>}
+    {nextStep?<div className="card nextStepCard" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><div className="between" style={{alignItems:'flex-start',gap:'16px',marginTop:'6px'}}><div><h2 style={{marginBottom:'4px'}}>{nextStep.title}</h2><div className="muted">{nextStep.time}</div>{nextStep.details&&<p>{nextStep.details}</p>}{nextStep.routeText&&<p className="muted small">🚌 {nextStep.routeText}</p>}{(nextStep.keyInfo||nextStep.confirmationNumber)&&<div style={{marginTop:'12px'}}><strong>Key Info</strong><p style={{whiteSpace:'pre-wrap',marginTop:'4px'}}>{nextStep.keyInfo??nextStep.confirmationNumber}</p></div>}</div><span className="chip">{nextStepIndex+1} of {currentDay.items.length}</span></div><div className="placeActions" style={{marginTop:'14px'}}>{nextStep.mapUrl&&<a className="btn primary" href={nextStep.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}<button className="btn" onClick={()=>toggleDay(currentDayIndex,nextStepIndex)}>Mark complete</button></div></div>:<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><h2 style={{marginTop:'6px'}}>You’re done for today</h2><p className="muted">Every itinerary item for this day is complete.</p></div>}
     <div className="statGrid"><div className="stat"><span>Trip progress</span><strong>{completedTrip}/{tripProgress.length}</strong></div><div className="stat"><span>Saved places</span><strong>{state.places.length}</strong></div><div className="stat"><span>Foods remaining</span><strong>{state.foods.filter(i=>!i.done).length}</strong></div></div>
     <h2 className="sectionTitle">Today’s plan</h2>
     {currentDay.items.map((item,index)=>{const hoursCheck=checkItineraryHours(item,currentDay.date,state.places);return <div className={`card timelineItem ${item.done?'done':''} ${item.skipped?'skipped':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(currentDayIndex,index)}/><div className="timeBadge">{item.time}</div><ItineraryDetails item={item} places={state.places} dayIndex={currentDayIndex} itemIndex={index} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(currentDayIndex)} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div>;})}
     <div className="between sectionHeading"><h2 className="sectionTitle">Recommended for this day</h2><button className="textButton" onClick={()=>{setRegion(currentDay.city.includes('Toronto')?'Toronto':'Niagara & Buffalo');setArea('All');setTab('Places');}}>See all</button></div>
     <div className="grid compactGrid">{nearbySuggestions.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>
    </section>}
-   {tab==='Assistant'&&assistant&&<AssistantView assistant={assistant} tripState={state} now={assistantNow} liveLocation={assistantPreview?.area?null:liveLocation} preview={assistantPreview} onPreviewChange={setAssistantPreview} locationStatus={locationStatus} locationMessage={locationMessage} onRequestLocation={requestLocation} onStopLocation={stopUsingLocation} onComplete={item=>{
+   {tab==='Assistant'&&assistant&&<AssistantView assistant={assistant} tripState={state} now={assistantNow} liveLocation={assistantPreview?.area?null:liveLocation} preview={assistantPreview} onPreviewChange={setAssistantPreview} onMealBalanceChange={updateMealBalance} locationStatus={locationStatus} locationMessage={locationMessage} onRequestLocation={requestLocation} onStopLocation={stopUsingLocation} onComplete={item=>{
     const day=state.days[assistant.currentDayIndex];
     const itemIndex=day?.items.findIndex(candidate=>candidate.id===item.id)??-1;
     if(itemIndex>=0)toggleDay(assistant.currentDayIndex,itemIndex);
@@ -541,8 +747,9 @@ export default function TripApp(){
     setCategory('All');
     setPriority('All');
     setTab('Places');
-   }} onExploreNearby={()=>setTab('Nearby')}/>}
-   {tab==='Nearby'&&currentDay&&<NearbyExplorer state={state} currentDayIndex={currentDayIndex} now={now} liveLocation={liveLocation} locationStatus={locationStatus} locationMessage={locationMessage} onRequestLocation={requestLocation} onStopLocation={stopUsingLocation} onVisited={toggleVisited} onAddToItinerary={addPlaceToItinerary} onShowPlace={place=>{
+   }} onExploreNearby={()=>setTab('Nearby')} onMarkFoodTried={markFoodTried}/>}
+   {tab==='Journal'&&<TripJournal state={state} canEdit={editorView} onNoteChange={updateJournalNote} onMomentSave={saveJournalMoment} onMomentDelete={deleteJournalMoment}/>}
+   {tab==='Nearby'&&currentDay&&<NearbyExplorer state={state} currentDayIndex={currentDayIndex} now={now} liveLocation={liveLocation} locationStatus={locationStatus} locationMessage={locationMessage} onRequestLocation={requestLocation} onStopLocation={stopUsingLocation} onVisited={toggleVisited} onAddToItinerary={addPlaceToItinerary} onSavePreset={saveNearbyPreset} onDeletePreset={deleteNearbyPreset} onSetDefaultPreset={setDefaultNearbyPreset} onShowPlace={place=>{
     setQuery(place.name);
     setRegion(place.region);
     setArea('All');
@@ -560,8 +767,9 @@ export default function TripApp(){
     setTab('Itinerary');
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
-   {tab==='Food'&&<section><div className="pageIntro"><div><div className="eyebrow">LOCAL FLAVORS</div><h2>Eat the trip</h2></div><span className="chip">{state.foods.filter(i=>i.done).length}/{state.foods.length} tried</span></div>{['Try','Bring home'].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.foods.map((food,index)=>food.category===group&&<label className={`card checkCard ${food.done?'done':''}`} key={food.id}><input type="checkbox" checked={food.done} onChange={()=>toggleList('foods',index)}/><div><h3>{food.title}</h3>{food.notes&&<p className="muted small">{food.notes}</p>}</div></label>)}</div></div>)}</section>}
-   {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>Find and manage places</h2><p className="muted">Organize saved spots by region and neighborhood so nearby suggestions stay geographically sensible.</p></div><div className="placeActions"><span className="chip">{filtered.length} shown</span>{unassignedAreaCount>0&&<button className="btn" onClick={()=>setArea('Unassigned')}>{unassignedAreaCount} unassigned</button>}{suggestibleAreaCount>0&&<button className="btn" onClick={assignSuggestedAreas}>Suggest {suggestibleAreaCount} areas</button>}<button className="btn primary" onClick={addPlace}>+ Add place</button></div></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, neighborhoods, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid placeFilters"><select className="field" aria-label="Filter by region" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" aria-label="Filter by area" value={area} onChange={e=>setArea(e.target.value)}><option>All</option><option>Unassigned</option>{availableAreas.map(value=><option value={value} key={value}>{value}</option>)}</select><select className="field" aria-label="Filter by category" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" aria-label="Filter by priority" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)} onEdit={changes=>editPlace(place.id,changes)} onEditHours={(day,changes)=>editPlaceHours(place.id,day,changes)} onSave={savePlaceChanges} onGoogleUpdate={replacePlace} onDuplicate={()=>duplicatePlace(place.id)} onDelete={()=>deletePlace(place.id)} tripDates={state.days}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
+   {tab==='Food'&&<section><div className="pageIntro"><div><div className="eyebrow">LOCAL FLAVORS</div><h2>Eat the trip</h2></div><span className="chip">{state.foods.filter(i=>i.done).length}/{state.foods.length} tried</span></div>{editorView&&<><div className="card tripDietPanel"><div><strong>Food preferences for this trip</strong><p className="muted small">These gently improve recommendations; they do not hide foods or judge what you choose.</p></div><div className="dietChoiceRow">{dietaryPreferences.map(preference=><label className={`dietChoice ${state.dietaryPreferences?.includes(preference.id)?'selected':''}`} key={preference.id}><input type="checkbox" checked={state.dietaryPreferences?.includes(preference.id)??false} onChange={()=>toggleTripDiet(preference.id)}/>{preference.label}{!preference.active&&<small>ready for later</small>}</label>)}</div></div><FoodConnectionsPanel foods={state.foods} places={state.places} onConnection={updateFoodPlaceConnection} onOpenPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></>}{['Try','Bring home'].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.foods.map((food,index)=>food.category===group&&<label className={`card checkCard ${food.done?'done':''}`} key={food.id}><input type="checkbox" checked={food.done} onChange={()=>toggleList('foods',index)}/><div><h3>{food.title}</h3>{food.notes&&<p className="muted small">{food.notes}</p>}{food.triedAt&&<p className="foodTriedMeta">Tried{food.triedAtPlaceId?` at ${state.places.find(place=>place.id===food.triedAtPlaceId)?.name??'a saved place'}`:''} · {new Date(food.triedAt).toLocaleDateString()}</p>}</div></label>)}</div></div>)}</section>}
+   {tab==='Dietary'&&<DietaryReview places={state.places} onEdit={editPlace} onBulkEdit={editPlaces} onSave={savePlaceChanges}/>}
+   {tab==='Places'&&<section><div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>{editorView?'Find and manage places':'Explore saved places'}</h2><p className="muted">{editorView?'Organize saved spots by region, neighborhood, and practical dietary fit.':'Browse restaurants, neighborhoods, museums, and other trip ideas.'}</p></div><div className="placeActions"><span className="chip">{filtered.length} shown</span>{editorView&&unassignedAreaCount>0&&<button className="btn" onClick={()=>setArea('Unassigned')}>{unassignedAreaCount} unassigned</button>}{editorView&&suggestibleAreaCount>0&&<button className="btn" onClick={assignSuggestedAreas}>Suggest {suggestibleAreaCount} areas</button>}{editorView&&<button className="btn primary" onClick={addPlace}>+ Add place</button>}</div></div><div className="filterPanel card"><input className="field searchField" placeholder="Search restaurants, neighborhoods, museums, notes…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="filterGrid placeFilters"><select className="field" aria-label="Filter by region" value={region} onChange={e=>setRegion(e.target.value)}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select><select className="field" aria-label="Filter by area" value={area} onChange={e=>setArea(e.target.value)}><option>All</option><option>Unassigned</option>{availableAreas.map(value=><option value={value} key={value}>{value}</option>)}</select><select className="field" aria-label="Filter by category" value={category} onChange={e=>setCategory(e.target.value)}><option>All</option>{[...new Set(state.places.map(p=>p.category))].sort().map(v=><option key={v}>{v}</option>)}</select><select className="field" aria-label="Filter by priority" value={priority} onChange={e=>setPriority(e.target.value)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select>{editorView&&<><select className="field" aria-label="Filter by dietary preference" value={dietFilter} onChange={e=>{setDietFilter(e.target.value as 'All'|DietaryPreference);setDietFitFilter('All');}}><option value="All">Any dietary rating</option>{dietaryPreferences.map(item=><option value={item.id} key={item.id}>{item.label}</option>)}</select><select className="field" aria-label="Filter by dietary fit" value={dietFitFilter} disabled={dietFilter==='All'} onChange={e=>setDietFitFilter(e.target.value as 'All'|DietaryFit)}><option value="All">Any evaluated fit</option>{dietaryFits.map(item=><option value={item.id} key={item.id}>{item.label}</option>)}</select></>}</div><label className="toggleLine"><input type="checkbox" checked={showVisited} onChange={e=>setShowVisited(e.target.checked)}/> Show visited places</label></div><div className="grid placeGrid">{filtered.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)} onEdit={editorView?changes=>editPlace(place.id,changes):undefined} onEditHours={editorView?(day,changes)=>editPlaceHours(place.id,day,changes):undefined} onSave={editorView?savePlaceChanges:undefined} onGoogleUpdate={editorView?replacePlace:undefined} onDuplicate={editorView?()=>duplicatePlace(place.id):undefined} onDelete={editorView?()=>deletePlace(place.id):undefined} tripDates={state.days} tripFoods={state.foods}/>)}</div>{filtered.length===0&&<div className="empty card">No saved places match those filters.</div>}</section>}
    {tab==='Hours'&&<HoursManager places={state.places} days={state.days} onUpdated={replacePlaces} onIgnoreHours={(place,ignoreHours)=>{editPlace(place.id,{ignoreHours});window.setTimeout(savePlaceChanges,0);}} onOpenPlace={place=>{
     setQuery(place.name);
     setRegion(place.region);
@@ -572,6 +780,8 @@ export default function TripApp(){
    }}/>}
    {tab==='Checklist'&&<section><div className="pageIntro"><div><div className="eyebrow">PACK SMART</div><h2>Nothing important left behind</h2></div><span className="chip">{state.packing.filter(i=>i.done).length}/{state.packing.length} packed</span></div>{[...new Set(state.packing.map(i=>i.category))].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.packing.map((item,index)=>item.category===group&&<label className={`card checkCard ${item.done?'done':''}`} key={item.id}><input type="checkbox" checked={item.done} onChange={()=>toggleList('packing',index)}/><div>{item.title}</div></label>)}</div></div>)}</section>}
   </main>
+  {showSharePanel&&<div className="editorUnlockBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setShowSharePanel(false);}}><section className="card shareAccessPanel" role="dialog" aria-modal="true" aria-labelledby="share-access-title"><button className="editorUnlockClose" aria-label="Close share and access" onClick={()=>setShowSharePanel(false)}>×</button><div className="eyebrow">SHARE & ACCESS</div><div className="shareAccessHeading"><div><h2 id="share-access-title">Invite people into the trip</h2><p className="muted">Visitors can browse the public itinerary, places, food list, and recap without seeing private planning details.</p></div><span className={`accessModeBadge ${editorView?'editing':'public'}`}>{editorView?'Editing unlocked':'Public view'}</span></div><div className="shareAccessGrid"><div className="shareLinkCard"><strong>Public trip link</strong><div className="shareUrl"><span>{publicUrl||'Loading link…'}</span><button className="btn primary" onClick={copyPublicLink} disabled={!publicUrl}>Copy</button></div><div className="shareButtons"><button className="btn" onClick={sharePublicLink} disabled={!publicUrl}>Share from this device</button>{isEditor&&<button className="btn" onClick={enterPublicPreview}>Preview public view</button>}</div>{shareMessage&&<p className="shareMessage" role="status">{shareMessage}</p>}</div><div className="qrCard"><div className="qrFrame">{qrCode?<Image src={qrCode} alt="QR code for the public Trip Hub link" width={180} height={180} unoptimized/>:<span>Preparing QR code…</span>}</div><small>Scan to open the public trip</small></div></div><div className="privacySummary"><div><span className="privacyIcon public">✓</span><div><strong>Visitors can see</strong><p>Public itinerary, saved places, food ideas, nearby suggestions, and the trip recap.</p></div></div><div><span className="privacyIcon private">⌁</span><div><strong>Stays private</strong><p>Confirmation numbers, Key Info, personal notes, packing lists, dietary guidance, and editing tools.</p></div></div></div>{isEditor?<div className="shareAccessFooter"><div><strong>Editor session is active</strong><span>{publicPreview?'You are previewing the public experience.':'Your private editing tools are currently available on this device.'}</span></div><button className="btn dangerButton" onClick={lockEditor}>Lock editing now</button></div>:<div className="shareAccessFooter"><div><strong>Viewing publicly</strong><span>Use the shared PIN if you need to make changes.</span></div><button className="btn" onClick={()=>{setShowSharePanel(false);setAuthError('');setShowEditorUnlock(true);}}>Editor access</button></div>}</section></div>}
+  {showEditorUnlock&&<div className="editorUnlockBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setShowEditorUnlock(false);}}><section className="card editorUnlock" role="dialog" aria-modal="true" aria-labelledby="editor-unlock-title"><button className="editorUnlockClose" aria-label="Close editor access" onClick={()=>setShowEditorUnlock(false)}>×</button><div className="eyebrow">PRIVATE EDITING</div><h2 id="editor-unlock-title">Unlock editor mode</h2><p className="muted">Enter the shared editor PIN to update plans, confirmations, private notes, dietary guidance, and checklists.</p><form onSubmit={unlockEditor}><label>Editor PIN<input className="field" type="password" autoFocus autoComplete="current-password" value={editorPin} onChange={event=>setEditorPin(event.target.value)}/></label>{authError&&<p className="error" role="alert">{authError}</p>}<button className="btn primary" disabled={authBusy||!editorPin}>{authBusy?'Unlocking…':'Unlock editing'}</button></form></section></div>}
  </>;
 }
 
@@ -989,31 +1199,226 @@ function statusLabel(status:AssistantState['status']){
  return 'Plenty of flexibility';
 }
 
+type JournalEvent={id:string;at:string;kind:'completed'|'visited'|'food'|'skipped'|'rescheduled'|'moment';title:string;detail?:string;moment?:JournalMoment};
+
+function tripDateForTimestamp(timestamp:string){
+ const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Toronto',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(timestamp));
+ const values=Object.fromEntries(parts.map(part=>[part.type,part.value]));
+ return `${values.year}-${values.month}-${values.day}`;
+}
+
+function journalMomentTimestamp(moment:JournalMoment){
+ return new Date(`${moment.date}T${moment.time}:00-04:00`).toISOString();
+}
+
+function journalEvents(state:TripState,date:string):JournalEvent[]{
+ const events:JournalEvent[]=[];
+ for(const day of state.days){
+  for(const item of day.items){
+   if(item.completedAt&&tripDateForTimestamp(item.completedAt)===date)events.push({id:`complete-${item.id}`,at:item.completedAt,kind:'completed',title:item.title,detail:`Completed from ${day.label} plans`});
+   if(item.skippedAt&&tripDateForTimestamp(item.skippedAt)===date)events.push({id:`skip-${item.id}`,at:item.skippedAt,kind:'skipped',title:item.title,detail:'Left flexible for another time'});
+   if(item.lastRescheduledAt&&tripDateForTimestamp(item.lastRescheduledAt)===date)events.push({id:`move-${item.id}`,at:item.lastRescheduledAt,kind:'rescheduled',title:item.title,detail:`Moved from ${item.rescheduledFromDate??'another day'} to ${day.label}`});
+  }
+ }
+ for(const place of state.places){
+  if(place.visitedAt&&tripDateForTimestamp(place.visitedAt)===date)events.push({id:`visit-${place.id}`,at:place.visitedAt,kind:'visited',title:place.name,detail:`Visited · ${place.area??place.region}`});
+ }
+ for(const food of state.foods){
+  if(!food.triedAt||tripDateForTimestamp(food.triedAt)!==date)continue;
+  if((state.journalMoments??[]).some(moment=>moment.date===date&&moment.foodId===food.id))continue;
+  const place=food.triedAtPlaceId?state.places.find(item=>item.id===food.triedAtPlaceId):undefined;
+  events.push({id:`food-${food.id}`,at:food.triedAt,kind:'food',title:food.title,detail:place?`Tried at ${place.name}`:'Local specialty tried'});
+ }
+ for(const moment of state.journalMoments??[]){
+  if(moment.date!==date)continue;
+  const place=moment.placeId?state.places.find(item=>item.id===moment.placeId):undefined;
+  const food=moment.foodId?state.foods.find(item=>item.id===moment.foodId):undefined;
+  const links=[place?.name,food?.title].filter(Boolean).join(' · ');
+  events.push({id:`moment-${moment.id}`,at:journalMomentTimestamp(moment),kind:'moment',title:moment.title,detail:[links,moment.note].filter(Boolean).join(' — '),moment});
+ }
+ return events.sort((a,b)=>a.at.localeCompare(b.at));
+}
+
+function tripTimeNow(){
+ const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Toronto',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date());
+ const values=Object.fromEntries(parts.map(part=>[part.type,part.value]));
+ return `${values.hour}:${values.minute}`;
+}
+
+function QuickCapture({date,places,foods,initial,onSave,onDelete,onCancel}:{date:string;places:Place[];foods:CheckItem[];initial?:JournalMoment;onSave:(moment:JournalMoment)=>void;onDelete:(id:string)=>void;onCancel?:()=>void}){
+ const [type,setType]=useState<JournalMomentType>(initial?.type??'memory');
+ const [time,setTime]=useState(initial?.time??tripTimeNow());
+ const [title,setTitle]=useState(initial?.title??'');
+ const [note,setNote]=useState(initial?.note??'');
+ const [placeId,setPlaceId]=useState(initial?.placeId??'');
+ const [foodId,setFoodId]=useState(initial?.foodId??'');
+ const [lastSaved,setLastSaved]=useState<JournalMoment|null>(null);
+ useEffect(()=>{
+  setType(initial?.type??'memory');setTime(initial?.time??tripTimeNow());setTitle(initial?.title??'');setNote(initial?.note??'');setPlaceId(initial?.placeId??'');setFoodId(initial?.foodId??'');
+ },[date,initial]);
+ function reset(){setType('memory');setTime(tripTimeNow());setTitle('');setNote('');setPlaceId('');setFoodId('');}
+ function save(){
+  if(!title.trim())return;
+  const moment:JournalMoment={id:initial?.id??`moment-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,date,time:time||tripTimeNow(),type,title:title.trim(),note:note.trim()||undefined,placeId:placeId||undefined,foodId:foodId||undefined,createdAt:initial?.createdAt??new Date().toISOString(),updatedAt:initial?new Date().toISOString():undefined};
+  onSave(moment);setLastSaved(initial?null:moment);reset();onCancel?.();
+ }
+ const sortedPlaces=useMemo(()=>[...places].sort((a,b)=>a.name.localeCompare(b.name)),[places]);
+ return <details className="card quickCapture" open={initial?true:undefined}>
+  <summary><span><strong>{initial?'Edit captured moment':'＋ Quick capture'}</strong><small>{initial?'Update what you want to remember':'Add an unplanned place, food, activity, or memory'}</small></span></summary>
+  <div className="quickCaptureBody">
+   <div className="momentTypeChoices">{([['place','⌖ Place'],['food','🍴 Food'],['activity','✓ Activity'],['memory','✦ Memory']] as [JournalMomentType,string][]).map(([value,label])=><button className={type===value?'active':''} key={value} onClick={()=>setType(value)}>{label}</button>)}</div>
+   <div className="quickCapturePrimary"><label>Time<input className="field" type="time" value={time} onChange={event=>setTime(event.target.value)}/></label><label>Title<input className="field" value={title} onChange={event=>setTitle(event.target.value)} placeholder="What happened?"/></label></div>
+   <label>Note<textarea className="field" rows={2} value={note} onChange={event=>setNote(event.target.value)} placeholder="Optional detail, order, reaction, or memory…"/></label>
+   <div className="quickCaptureLinks"><label>Saved place<select className="field" value={placeId} onChange={event=>{setPlaceId(event.target.value);const place=places.find(item=>item.id===event.target.value);if(place&&!title)setTitle(place.name);}}><option value="">No place linked</option>{sortedPlaces.map(place=><option value={place.id} key={place.id}>{place.name}</option>)}</select></label><label>Specialty food<select className="field" value={foodId} onChange={event=>{setFoodId(event.target.value);const food=foods.find(item=>item.id===event.target.value);if(food&&!title)setTitle(food.title);}}><option value="">No food linked</option>{foods.map(food=><option value={food.id} key={food.id}>{food.title}</option>)}</select></label></div>
+   <div className="quickCaptureActions"><div>{initial&&<button className="textButton dangerText" onClick={()=>{if(window.confirm(`Delete “${initial.title}”?`)){onDelete(initial.id);onCancel?.();}}}>Delete</button>}{onCancel&&<button className="textButton" onClick={onCancel}>Cancel</button>}</div><button className="btn primary" disabled={!title.trim()} onClick={save}>{initial?'Save changes':'Add to journal'}</button></div>
+   {lastSaved&&<div className="captureUndo" role="status"><span>✓ Added “{lastSaved.title}” to the journal.</span><button className="textButton" onClick={()=>{onDelete(lastSaved.id);setLastSaved(null);}}>Undo</button></div>}
+  </div>
+ </details>;
+}
+
+function TripJournal({state,canEdit,onNoteChange,onMomentSave,onMomentDelete}:{state:TripState;canEdit:boolean;onNoteChange:(date:string,note:string,saveNow?:boolean)=>void;onMomentSave:(moment:JournalMoment)=>void;onMomentDelete:(id:string)=>void}){
+ const [editingMomentId,setEditingMomentId]=useState<string|null>(null);
+ const [view,setView]=useState<'journal'|'recap'>(canEdit?'journal':'recap');
+ useEffect(()=>{if(!canEdit)setView('recap');},[canEdit]);
+ const momentCount=state.days.reduce((total,day)=>total+journalEvents(state,day.date).length,0);
+ return <section className={view==='recap'?'recapScreen':''}><div className="pageIntro journalIntro"><div><div className="eyebrow">TRIP JOURNAL</div><h2>{view==='journal'?'The story of your trip':'Toronto · Niagara · Buffalo'}</h2><p className="muted">{view==='journal'?'Completed plans, discoveries, and local foods appear here automatically. Add anything else you want to remember.':'A keepsake built from the moments, places, and flavors you captured along the way.'}</p></div><div className="journalIntroActions">{canEdit&&<div className="viewSwitch" aria-label="Journal view"><button className={view==='journal'?'active':''} onClick={()=>setView('journal')}>Journal</button><button className={view==='recap'?'active':''} onClick={()=>setView('recap')}>Recap</button></div>}{view==='recap'?<button className="btn recapPrintButton" onClick={()=>window.print()}>Print / Save PDF</button>:<span className="chip">{momentCount} moments</span>}</div></div>{view==='recap'?<TripRecap state={state} publicView={!canEdit}/>:<div className="journalDays">{state.days.map(day=>{const events=journalEvents(state,day.date);const completed=events.filter(event=>event.kind==='completed').length;const visits=events.filter(event=>event.kind==='visited').length;const foods=events.filter(event=>event.kind==='food'||event.moment?.type==='food').length;const editingMoment=(state.journalMoments??[]).find(moment=>moment.id===editingMomentId&&moment.date===day.date);return <article className="card journalDay" key={day.date}>
+  <div className="journalDayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="journalStats"><span>{completed} completed</span><span>{visits} visited</span><span>{foods} tasted</span></div></div>
+  {events.length>0?<div className="journalTimeline">{events.map(event=><div className={`journalEvent journal-${event.kind}`} key={event.id}><span className="journalEventIcon" aria-hidden="true">{event.moment?.type==='place'||event.kind==='visited'?'⌖':event.moment?.type==='food'||event.kind==='food'?'🍴':event.moment?.type==='memory'?'✦':event.kind==='completed'||event.moment?.type==='activity'?'✓':event.kind==='skipped'?'↷':'↔'}</span><div><div className="journalEventTop"><strong>{event.title}</strong><div><time dateTime={event.at}>{new Date(event.at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit',timeZone:'America/Toronto'})}</time>{event.moment&&<button className="textButton" onClick={()=>setEditingMomentId(event.moment!.id)}>Edit</button>}</div></div>{event.detail&&<p>{event.detail}</p>}</div></div>)}</div>:<p className="journalEmpty">No moments recorded yet. This day will fill in naturally as you use Trip Hub.</p>}
+  <QuickCapture date={day.date} places={state.places} foods={state.foods} initial={editingMoment} onSave={onMomentSave} onDelete={onMomentDelete} onCancel={()=>setEditingMomentId(null)}/>
+  <label className="journalNotes"><strong>Notes and discoveries</strong><textarea className="field" rows={3} value={state.journalNotesByDate?.[day.date]??''} onChange={event=>onNoteChange(day.date,event.target.value)} onBlur={event=>onNoteChange(day.date,event.currentTarget.value,true)} placeholder="A favorite moment, an unplanned stop, what you ordered, or anything worth remembering…"/></label>
+ </article>;})}</div>}</section>;
+}
+
+function recapEventIcon(event:JournalEvent){
+ if(event.moment?.type==='place'||event.kind==='visited')return '⌖';
+ if(event.moment?.type==='food'||event.kind==='food')return '🍴';
+ if(event.moment?.type==='memory')return '✦';
+ if(event.kind==='completed'||event.moment?.type==='activity')return '✓';
+ if(event.kind==='skipped')return '↷';
+ return '↔';
+}
+
+function TripRecap({state,publicView=false}:{state:TripState;publicView?:boolean}){
+ const dayStories=state.days.map(day=>({day,events:journalEvents(state,day.date),note:state.journalNotesByDate?.[day.date]?.trim()??''}));
+ const allEvents=dayStories.flatMap(story=>story.events);
+ const visitedCount=new Set(allEvents.filter(event=>event.kind==='visited'||event.moment?.type==='place').map(event=>event.moment?.placeId??event.title)).size;
+ const foodsCount=new Set(allEvents.filter(event=>event.kind==='food'||event.moment?.type==='food').map(event=>event.moment?.foodId??event.title)).size;
+ const activityCount=allEvents.filter(event=>event.kind==='completed'||event.moment?.type==='activity').length;
+ const highlights=allEvents.filter(event=>event.moment?.type==='memory').slice(0,4);
+ const storiesWithContent=dayStories.filter(story=>story.events.length>0||story.note);
+ return <div className="tripRecap">
+  <header className="recapCover card"><div><div className="eyebrow">TRIP RECAP · 2026</div><h1>One week around Lake Ontario</h1><p>Toronto · Niagara Falls · Buffalo</p><span>September 24–October 1</span></div><div className="recapMonogram" aria-hidden="true">TO</div></header>
+  <section className="recapStats" aria-label="Trip highlights"><div><strong>{visitedCount}</strong><span>places discovered</span></div><div><strong>{foodsCount}</strong><span>local foods tried</span></div><div><strong>{activityCount}</strong><span>activities completed</span></div><div><strong>{allEvents.length}</strong><span>moments captured</span></div></section>
+  {highlights.length>0&&<section className="recapHighlights card"><div className="eyebrow">FAVORITE MOMENTS</div><div className="recapHighlightGrid">{highlights.map(event=><blockquote key={event.id}><span>✦</span><div><strong>{event.title}</strong>{!publicView&&event.detail&&<p>{event.detail}</p>}</div></blockquote>)}</div></section>}
+  <section className="recapStory"><div className="recapSectionHeading"><div className="eyebrow">DAY BY DAY</div><h2>The trip story</h2></div>{storiesWithContent.length>0?storiesWithContent.map(({day,events,note})=><article className="recapDay card" key={day.date}>
+   <header><div><span>{new Date(`${day.date}T12:00:00`).toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</span><h2>{day.city}</h2></div><strong>{events.length} moment{events.length===1?'':'s'}</strong></header>
+   {events.length>0&&<div className="recapMoments">{events.filter(event=>event.kind!=='skipped'&&event.kind!=='rescheduled').map(event=><div className={`recapMoment recap-${event.kind}`} key={event.id}><span className="recapMomentIcon" aria-hidden="true">{recapEventIcon(event)}</span><div><strong>{event.title}</strong>{event.detail&&(!publicView||!event.moment)&&<p>{event.detail}</p>}</div><time dateTime={event.at}>{new Date(event.at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit',timeZone:'America/Toronto'})}</time></div>)}</div>}
+   {!publicView&&note&&<div className="recapDayNote"><span>From the journal</span><p>{note}</p></div>}
+  </article>):<div className="card recapEmpty"><h3>Your recap is ready to grow</h3><p>Complete plans, mark places visited, try local foods, or add Quick Capture memories. They will appear here automatically.</p></div>}</section>
+  <footer className="recapFooter"><strong>Trip Hub</strong><span>Made from your travel journal</span></footer>
+ </div>;
+}
+
+function FoodConnectionsPanel({foods,places,onConnection,onOpenPlace}:{foods:CheckItem[];places:Place[];onConnection:(placeId:string,foodId:string,linked:boolean)=>void;onOpenPlace:(place:Place)=>void}){
+ const [unlinkedOnly,setUnlinkedOnly]=useState(false);
+ const [selectedPlaces,setSelectedPlaces]=useState<Record<string,string>>({});
+ const foodPlaces=useMemo(()=>places.filter(isFoodPlace).sort((a,b)=>a.name.localeCompare(b.name)),[places]);
+ const rows=foods.map(food=>({food,connected:places.filter(place=>placeSpecialtyFoodIds(place,foods).includes(food.id))})).filter(row=>!unlinkedOnly||row.connected.length===0);
+ const connectedCount=foods.filter(food=>places.some(place=>placeSpecialtyFoodIds(place,foods).includes(food.id))).length;
+ return <details className="card foodConnectionsPanel">
+  <summary><span><strong>Specialty connections</strong><small>Link foods to the restaurants that serve them</small></span><span className="chip">{connectedCount}/{foods.length} linked</span></summary>
+  <div className="foodConnectionsBody">
+   <div className="foodConnectionsToolbar"><p className="muted small">These connections power nearby specialty suggestions in the Assistant.</p><label className="toggleLine"><input type="checkbox" checked={unlinkedOnly} onChange={event=>setUnlinkedOnly(event.target.checked)}/> Show unlinked foods only</label></div>
+   <div className="foodConnectionsList">{rows.map(({food,connected})=>{const available=foodPlaces.filter(place=>!connected.some(item=>item.id===place.id));const selected=selectedPlaces[food.id]??'';return <article className="foodConnectionRow" key={food.id}>
+    <div className="foodConnectionHeading"><div><strong>{food.title}</strong><small>{connected.length?`${connected.length} place${connected.length===1?'':'s'} linked`:'No restaurant linked yet'}</small></div>{food.done&&<span className="chip">Tried</span>}</div>
+    {connected.length>0&&<div className="connectedPlaces">{connected.map(place=><div key={place.id}><button className="connectedPlaceName" onClick={()=>onOpenPlace(place)}>{place.name}</button><button className="textButton dangerText" onClick={()=>onConnection(place.id,food.id,false)}>Remove</button></div>)}</div>}
+    <div className="connectionForm"><select className="field" aria-label={`Restaurant to link with ${food.title}`} value={selected} onChange={event=>setSelectedPlaces(current=>({...current,[food.id]:event.target.value}))}><option value="">Choose a food place…</option>{available.map(place=><option value={place.id} key={place.id}>{place.name}</option>)}</select><button className="btn" disabled={!selected} onClick={()=>{if(!selected)return;onConnection(selected,food.id,true);setSelectedPlaces(current=>({...current,[food.id]:''}));}}>Link place</button></div>
+   </article>;})}</div>
+   {rows.length===0&&<p className="empty">Every food currently has at least one restaurant connection.</p>}
+  </div>
+ </details>;
+}
+
+function MealBalanceCard({date,value,triedFoods=[],onChange,compact=false}:{date:string;value?:{treatSampled:boolean;note?:string};triedFoods?:CheckItem[];onChange:(date:string,changes:{treatSampled?:boolean;note?:string},saveNow?:boolean)=>void;compact?:boolean}){
+ const sampled=value?.treatSampled??false;
+ const automatic=triedFoods.length>0;
+ const favorSimpler=sampled||automatic;
+ return <section className={`card mealBalanceCard ${compact?'compact':''}`} aria-label="Meal preference for this day">
+  <div className="mealBalanceCopy"><div className="eyebrow">MEAL PREFERENCE</div><h3>{favorSimpler?'Favor simpler next-meal ideas':'Keep every food option in the mix'}</h3><p className="muted small">A gentle recommendation hint for this day only—not a food scorecard.</p></div>
+  {automatic&&<div className="automaticMealSignal"><strong>Noted automatically</strong><span>You tried {triedFoods.map(food=>food.title).join(' + ')} today.</span></div>}
+  <div className="mealBalanceControls"><label className="mealBalanceToggle"><input type="checkbox" checked={sampled} onChange={event=>onChange(date,{treatSampled:event.target.checked},true)}/> {automatic?'Also keep the manual override on':'We sampled today’s treat'}</label><input className="field" value={value?.note??''} onChange={event=>onChange(date,{note:event.target.value})} onBlur={()=>onChange(date,{},true)} placeholder="Optional note, such as poutine at lunch" aria-label="Optional note about today's treat"/></div>
+  {favorSimpler&&<p className="mealBalanceActive">The Assistant will gently favor easier or workable food options next. Nothing is hidden.</p>}
+ </section>;
+}
+
 type AssistantSuggestionMode='all'|'food'|'indoor';
 
 function matchesAssistantMode(place:Place,mode:AssistantSuggestionMode){
  if(mode==='all')return true;
  const text=`${place.name} ${place.category} ${place.tags.join(' ')}`.toLowerCase();
- if(mode==='food')return /restaurant|food|bakery|coffee|cafe|dessert|candy|bar|market|diner|pizza|taco/.test(text);
+ if(mode==='food')return isFoodPlace(place);
  return /museum|gallery|aquarium|library|market|shop|mall|theatre|theater|escape|restaurant|food|bakery|cafe|coffee|store|hall of fame/.test(text);
 }
 
-function AssistantView({assistant,tripState,now,liveLocation,preview,onPreviewChange,locationStatus,locationMessage,onRequestLocation,onStopLocation,onComplete,onSkip,onAddToToday,onVisited,onShowPlaces,onExploreNearby}:{assistant:AssistantState;tripState:TripState;now:Date;liveLocation:AssistantLocation|null;preview:AssistantPreview|null;onPreviewChange:(preview:AssistantPreview|null)=>void;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onComplete:(item:ItineraryItem)=>void;onSkip:(item:ItineraryItem)=>void;onAddToToday:(place:Place)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void;onExploreNearby:()=>void}){
+function AssistantView({assistant,tripState,now,liveLocation,preview,onPreviewChange,onMealBalanceChange,locationStatus,locationMessage,onRequestLocation,onStopLocation,onComplete,onSkip,onAddToToday,onVisited,onShowPlaces,onExploreNearby,onMarkFoodTried}:{assistant:AssistantState;tripState:TripState;now:Date;liveLocation:AssistantLocation|null;preview:AssistantPreview|null;onPreviewChange:(preview:AssistantPreview|null)=>void;onMealBalanceChange:(date:string,changes:{treatSampled?:boolean;note?:string},saveNow?:boolean)=>void;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onComplete:(item:ItineraryItem)=>void;onSkip:(item:ItineraryItem)=>void;onAddToToday:(place:Place)=>void;onVisited:(id:string)=>void;onShowPlaces:(place:Place)=>void;onExploreNearby:()=>void;onMarkFoodTried:(foodId:string,placeId?:string,done?:boolean)=>void}){
  const [extraMinutes,setExtraMinutes]=useState<number|null>(null);
  const [suggestionMode,setSuggestionMode]=useState<AssistantSuggestionMode>('all');
  const [addedPlaces,setAddedPlaces]=useState<Set<string>>(()=>new Set());
+ const [weather,setWeather]=useState<WeatherResponse|null>(null);
+ const [weatherLoading,setWeatherLoading]=useState(false);
+ const [lastTried,setLastTried]=useState<{food:CheckItem;place:Place}|null>(null);
  const previewMode=Boolean(preview);
  const actionItem=assistant.currentActivity??assistant.nextReservation??assistant.nextItem;
  const fixedItem=assistant.nextReservation;
  const suggestionMinutes=extraMinutes??Math.max(assistant.availableMinutes,60);
  const previewDay=tripState.days.find(day=>day.date===(preview?.date??assistant.currentDay?.date));
+ const weatherDate=previewDay?.date??assistant.currentDay?.date;
+ useEffect(()=>{
+  if(!weatherDate)return;
+  const controller=new AbortController();
+  setWeatherLoading(true);
+  fetch(`/api/weather?date=${encodeURIComponent(weatherDate)}`,{signal:controller.signal})
+   .then(response=>response.ok?response.json():Promise.reject(new Error('Forecast unavailable')))
+   .then((value:WeatherResponse)=>setWeather(value))
+   .catch(error=>{if(error instanceof Error&&error.name!=='AbortError')setWeather(null);})
+   .finally(()=>setWeatherLoading(false));
+  return()=>controller.abort();
+ },[weatherDate]);
  const previewRegion=previewDay?.city.includes('Toronto')?'Toronto':'Niagara & Buffalo';
  const previewAreas=useMemo(()=>areaOptions(tripState.places.filter(place=>place.region===previewRegion)),[previewRegion,tripState.places]);
- const customSuggestions=useMemo(()=>assistant.currentDay&&(extraMinutes||suggestionMode!=='all')?findSuggestionCandidates(tripState,assistant.currentDay,suggestionMinutes,60,{anchor:assistant.suggestionAnchor,anchorArea:preview?.area||undefined,location:liveLocation??undefined,now,previewWallClock:previewMode}).filter(suggestion=>matchesAssistantMode(suggestion.place,suggestionMode)).slice(0,6):[],[assistant.currentDay,assistant.suggestionAnchor,extraMinutes,liveLocation,now,preview?.area,previewMode,suggestionMinutes,suggestionMode,tripState]);
- const displayedSuggestions:SuggestedPlace[]=extraMinutes||suggestionMode!=='all'?customSuggestions:assistant.suggestions;
+ const relevantCity=assistant.currentDay?.city.includes('Toronto')?'Toronto':assistant.currentDay?.city.includes('Buffalo')?'Buffalo':'Niagara Falls';
+ const relevantForecast=weather?.forecasts.find(forecast=>forecast.city===relevantCity&&forecast.status==='available');
+ const weatherSuggestions=useMemo(()=>assistant.currentDay?findSuggestionCandidates(tripState,assistant.currentDay,suggestionMinutes,extraMinutes||suggestionMode!=='all'?60:3,{anchor:assistant.suggestionAnchor,anchorArea:preview?.area||undefined,location:liveLocation??undefined,now,previewWallClock:previewMode,weather:relevantForecast}).filter(suggestion=>matchesAssistantMode(suggestion.place,suggestionMode)).slice(0,extraMinutes||suggestionMode!=='all'?6:3):[],[assistant.currentDay,assistant.suggestionAnchor,extraMinutes,liveLocation,now,preview?.area,previewMode,relevantForecast,suggestionMinutes,suggestionMode,tripState]);
+ const displayedSuggestions:SuggestedPlace[]=relevantForecast?weatherSuggestions:extraMinutes||suggestionMode!=='all'?weatherSuggestions:assistant.suggestions;
+ const foodTrySuggestions=useMemo(()=>{
+  if(!assistant.currentDay||suggestionMinutes<30)return [];
+  const candidates=findSuggestionCandidates(tripState,assistant.currentDay,suggestionMinutes,60,{anchor:assistant.suggestionAnchor,anchorArea:preview?.area||undefined,location:liveLocation??undefined,now,previewWallClock:previewMode,weather:relevantForecast});
+  const usedFoods=new Set<string>();
+  const options:{food:CheckItem;suggestion:SuggestedPlace}[]=[];
+  for(const suggestion of candidates){
+   for(const food of placeSpecialtyFoods(suggestion.place,tripState.foods).filter(item=>!item.done)){
+    if(usedFoods.has(food.id))continue;
+    usedFoods.add(food.id);
+    options.push({food,suggestion});
+    if(options.length===4)return options;
+   }
+  }
+  return options;
+ },[assistant.currentDay,assistant.suggestionAnchor,liveLocation,now,preview?.area,previewMode,relevantForecast,suggestionMinutes,tripState]);
+ const forecastNotice=weatherNotice(relevantForecast);
+ const packingReminders=weatherPackingReminders(relevantForecast);
  function addSuggestion(place:Place){
   onAddToToday(place);
   setAddedPlaces(current=>new Set(current).add(place.id));
+ }
+ function markTried(food:CheckItem,place:Place){
+  onMarkFoodTried(food.id,place.id,true);
+  setLastTried({food,place});
+ }
+ function undoTried(){
+  if(!lastTried)return;
+  onMarkFoodTried(lastTried.food.id,undefined,false);
+  setLastTried(null);
  }
  return <section className="assistantPage">
   <div className={`card assistantPreview ${preview?'active':''}`}>
@@ -1048,6 +1453,17 @@ function AssistantView({assistant,tripState,now,liveLocation,preview,onPreviewCh
    </div>
   </div>
 
+  {assistant.currentDay&&<MealBalanceCard compact date={assistant.currentDay.date} value={tripState.mealBalanceByDate?.[assistant.currentDay.date]} triedFoods={foodsTriedOnDate(tripState,assistant.currentDay.date)} onChange={onMealBalanceChange}/>}
+
+  <section className="card weatherPanel">
+   <div className="weatherHeader"><div><div className="eyebrow">TRIP WEATHER</div><h2>Forecast for {weatherDate}</h2><p className="muted">Weather gently adjusts suggestions; it never removes your choices.</p></div>{relevantForecast&&<span className={`weatherPreference preference-${weatherPreference(relevantForecast)}`}>{weatherPreference(relevantForecast)==='indoor'?'Indoor-friendly day':weatherPreference(relevantForecast)==='outdoor'?'Good outdoor window':'Mixed conditions'}</span>}</div>
+   {weatherLoading&&!weather&&<p className="muted">Checking the forecast…</p>}
+   {weather&&<div className="weatherGrid">{weather.forecasts.map(forecast=><article className={`weatherCity weather-${forecast.status}`} key={forecast.city}><div className="between"><strong>{forecast.city}</strong>{forecast.status==='available'&&<span className="weatherIcon" aria-hidden="true">{forecast.kind==='clear'?'☀️':forecast.kind==='cloudy'?'⛅':forecast.kind==='rain'?'🌧️':forecast.kind==='storm'?'⛈️':forecast.kind==='snow'?'🌨️':'🌫️'}</span>}</div>{forecast.status==='available'?<><b>{Math.round(forecast.temperatureMax??0)}° / {Math.round(forecast.temperatureMin??0)}°F</b><span>{forecast.summary} · {forecast.precipitationProbability??0}% precipitation</span></>:<><b>Forecast not available yet</b><span>{forecast.message}</span></>}</article>)}</div>}
+   {forecastNotice&&<div className="weatherNotice">{forecastNotice}</div>}
+   {packingReminders.length>0&&<div className="weatherPacking"><strong>Helpful packing notes</strong><ul>{packingReminders.map(reminder=><li key={reminder}>{reminder}</li>)}</ul></div>}
+   {!weatherLoading&&!weather&&<div className="weatherNotice">The forecast service is temporarily unavailable. Your itinerary and suggestions still work normally.</div>}
+  </section>
+
   {actionItem&&<div className="card assistantAction">
    <div>
     <div className="eyebrow">{assistant.currentActivity?'CURRENT ACTIVITY':fixedItem?'WHAT YOU NEED NEXT':'NEXT IDEA'}</div>
@@ -1070,12 +1486,17 @@ function AssistantView({assistant,tripState,now,liveLocation,preview,onPreviewCh
    <div className="reservationSummary"><span>Next fixed plan</span><strong>{fixedItem.title}</strong><small>{fixedItem.time}</small></div>
   </div>}
 
+  {lastTried&&<div className="foodTriedUndo" role="status"><span>✓ {lastTried.food.title} marked tried at {lastTried.place.name}.</span><button className="textButton" onClick={undoTried}>Undo</button></div>}
+  {foodTrySuggestions.length>0&&<section className="card foodTryPanel"><div className="foodTryHeader"><div><div className="eyebrow">FOODS STILL TO TRY NEARBY</div><h2>Local tastes that fit this part of the day</h2><p className="muted">These stay optional. Once a food is checked off, the Assistant stops emphasizing it.</p></div><button className="btn" onClick={onExploreNearby}>Explore food nearby</button></div><div className="foodTryList">{foodTrySuggestions.map(({food,suggestion})=>{const directions=mapsUrl(suggestion.place.formattedAddress||suggestion.place.name);return <article key={`${food.id}-${suggestion.place.id}`}><span className="specialtyBadge">{food.title}</span><div><strong>{suggestion.place.name}</strong><small>{suggestion.walkingMinutes!==undefined?`About ${suggestion.walkingMinutes} min walking · `:''}{suggestion.reasons.find(reason=>reason.includes('Open now'))??`Fits within about ${suggestionMinutes} minutes`}</small></div><div className="placeActions">{!previewMode&&<button className="btn primary compactAction" onClick={()=>markTried(food,suggestion.place)}>Mark tried</button>}<a className="textButton" href={directions} target="_blank" rel="noreferrer">Directions</a><button className="textButton" onClick={()=>onShowPlaces(suggestion.place)}>Details</button></div></article>;})}</div></section>}
+
   {displayedSuggestions.length>0&&<section>
    <div className="pageIntro assistantIntro"><div><div className="eyebrow">{extraMinutes?'EXTRA-TIME IDEAS':'GREAT OPTIONS RIGHT NOW'}</div><h2>{extraMinutes?`Good options for about ${extraMinutes} minutes`:suggestionMode==='food'?'Food options that fit right now':suggestionMode==='indoor'?'Indoor options that fit right now':'Options that fit your available time'}</h2><p className="muted">These are possibilities, not obligations. Your next fixed commitment remains the timing guardrail.</p></div><span className="chip">About {suggestionMinutes} min free</span></div>
-   <div className="grid assistantGrid">{displayedSuggestions.map(suggestion=>{const open=placeOpenStatus(suggestion.place,now,previewMode);const directions=mapsUrl(suggestion.place.formattedAddress||suggestion.place.name);return <article className="card suggestionCard" key={suggestion.place.id}>
+   <div className="grid assistantGrid">{displayedSuggestions.map(suggestion=>{const open=placeOpenStatus(suggestion.place,now,previewMode);const directions=mapsUrl(suggestion.place.formattedAddress||suggestion.place.name);const untriedSpecialties=placeSpecialtyFoods(suggestion.place,tripState.foods).filter(food=>!food.done);return <article className="card suggestionCard" key={suggestion.place.id}>
     <div className="between"><span className={`priority priority-${suggestion.place.priority}`}>{suggestion.place.priority==='must'?'Must do':suggestion.place.priority}</span><span className={`hoursStatus hours-${open.status==='ignored'?'unknown':open.status}`}>{open.status==='open'?'Open now':open.status==='ignored'?'Hours not needed':'Hours unknown'}</span></div>
     <h3>{suggestion.place.name}</h3>
     <div className="placeLocationMeta"><span className="chip neutral">{suggestion.place.category}</span>{(suggestion.place.area??suggestPlaceArea(suggestion.place))&&<span className="areaBadge">{(suggestion.place.area??suggestPlaceArea(suggestion.place))!.split(' — ').at(-1)}</span>}</div>
+    {untriedSpecialties.length>0&&<div className="specialtyRow"><strong>Still to try</strong>{untriedSpecialties.map(food=><span className="specialtyBadge" key={food.id}>{food.title}</span>)}</div>}
+    {tripState.dietaryPreferences?.length?<div className="dietBadgeRow">{tripState.dietaryPreferences.map(preference=>{const rating=dietaryRating(suggestion.place,preference);return rating&&rating.fit!=='unknown'?<span className={`dietBadge diet-${rating.fit}`} key={preference}><i/>{dietaryPreferenceLabel(preference)}: {dietaryFitLabel(rating.fit)}</span>:null;})}</div>:null}
     <p className="nearbyFacts"><strong>{suggestion.estimatedDuration} min visit</strong>{suggestion.distanceKm!==undefined&&<span>{suggestion.distanceKm<1?`${Math.max(50,Math.round(suggestion.distanceKm*1000/50)*50)} m away`:`${suggestion.distanceKm.toFixed(1)} km away`}</span>}{suggestion.walkingMinutes!==undefined&&<span>≈ {suggestion.walkingMinutes} min walk</span>}</p>
     {suggestion.place.notes&&<p>{suggestion.place.notes}</p>}
     <div className="whyBox"><strong>Why this fits</strong><ul>{suggestion.reasons.slice(0,4).map(reason=><li key={reason}>{reason}</li>)}</ul></div>
@@ -1088,20 +1509,35 @@ function AssistantView({assistant,tripState,now,liveLocation,preview,onPreviewCh
  </section>;
 }
 
-function NearbyExplorer({state,currentDayIndex,now,liveLocation,locationStatus,locationMessage,onRequestLocation,onStopLocation,onVisited,onAddToItinerary,onShowPlace}:{state:TripState;currentDayIndex:number;now:Date;liveLocation:AssistantLocation|null;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onVisited:(id:string)=>void;onAddToItinerary:(place:Place,dayIndex:number)=>void;onShowPlace:(place:Place)=>void}){
+function NearbyExplorer({state,currentDayIndex,now,liveLocation,locationStatus,locationMessage,onRequestLocation,onStopLocation,onVisited,onAddToItinerary,onSavePreset,onDeletePreset,onSetDefaultPreset,onShowPlace}:{state:TripState;currentDayIndex:number;now:Date;liveLocation:AssistantLocation|null;locationStatus:'idle'|'requesting'|'active'|'error';locationMessage:string;onRequestLocation:()=>void;onStopLocation:()=>void;onVisited:(id:string)=>void;onAddToItinerary:(place:Place,dayIndex:number)=>void;onSavePreset:(preset:NearbyPreset)=>void;onDeletePreset:(id:string)=>void;onSetDefaultPreset:(id?:string)=>void;onShowPlace:(place:Place)=>void}){
  const defaultRegion=state.days[currentDayIndex]?.city.includes('Toronto')?'Toronto':'Niagara & Buffalo';
- const [selectedRegion,setSelectedRegion]=useState(defaultRegion);
- const [selectedArea,setSelectedArea]=useState('All');
- const [selectedCategory,setSelectedCategory]=useState('All');
- const [selectedPriority,setSelectedPriority]=useState<'All'|Place['priority']>('All');
- const [availableMinutes,setAvailableMinutes]=useState(60);
- const [maxDistanceKm,setMaxDistanceKm]=useState(2);
- const [openNowOnly,setOpenNowOnly]=useState(true);
- const [includeVisited,setIncludeVisited]=useState(false);
- const [nearbyQuery,setNearbyQuery]=useState('');
+ const defaultPreset=state.nearbyPresets?.find(preset=>preset.id===state.defaultNearbyPresetId);
+ const [selectedRegion,setSelectedRegion]=useState(defaultPreset?.region??defaultRegion);
+ const [selectedArea,setSelectedArea]=useState(defaultPreset?.area??'All');
+ const [selectedCategory,setSelectedCategory]=useState(defaultPreset?.category??'All');
+ const [selectedPriority,setSelectedPriority]=useState<'All'|Place['priority']>(defaultPreset?.priority??'All');
+ const [nearbyMode,setNearbyMode]=useState<'all'|'food'>(defaultPreset?.foodOnly?'food':'all');
+ const [dietaryMode,setDietaryMode]=useState<NearbyDietaryMode>(defaultPreset?.dietaryMode??'easier-or-unknown');
+ const [availableMinutes,setAvailableMinutes]=useState(defaultPreset?.availableMinutes??60);
+ const [maxDistanceKm,setMaxDistanceKm]=useState(defaultPreset?.maxDistanceKm??2);
+ const [openNowOnly,setOpenNowOnly]=useState(defaultPreset?.openNowOnly??true);
+ const [includeVisited,setIncludeVisited]=useState(defaultPreset?.includeVisited??false);
+ const [nearbyQuery,setNearbyQuery]=useState(defaultPreset?.query??'');
+ const [specialtyOnly,setSpecialtyOnly]=useState(Boolean(defaultPreset?.specialtyOnly));
+ const [activeCustomPresetId,setActiveCustomPresetId]=useState(defaultPreset?.id??'');
+ const [presetName,setPresetName]=useState(defaultPreset?.name??'');
  const [targetDayIndex,setTargetDayIndex]=useState(currentDayIndex);
  const [addedMessage,setAddedMessage]=useState('');
+ const [activeFoodPreset,setActiveFoodPreset]=useState<'easy'|'quick'|'local'|'late'|'before'|'all'|null>(null);
  const day=state.days[targetDayIndex]??state.days[currentDayIndex];
+ const activeDietaryPreferences=state.dietaryPreferences??[];
+ const triedToday=foodsTriedOnDate(state,day.date);
+ const mealBalanceActive=Boolean(state.mealBalanceByDate?.[day.date]?.treatSampled||triedToday.length);
+ const automaticGapMinutes=useMemo(()=>{
+  const wallClock=new Date(`${day.date}T${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:00`);
+  const gap=buildAssistantState(state,wallClock,liveLocation??undefined,undefined,true).availableMinutes;
+  return Math.max(15,Math.min(240,gap||60));
+ },[day.date,liveLocation,now,state]);
  const areaChoices=useMemo(()=>areaOptions(state.places.filter(place=>selectedRegion==='All'||place.region===selectedRegion)),[selectedRegion,state.places]);
  const results=useMemo(()=>findNearbyPlaces(state,day,now,liveLocation??undefined,{
   query:nearbyQuery,
@@ -1112,14 +1548,48 @@ function NearbyExplorer({state,currentDayIndex,now,liveLocation,locationStatus,l
   availableMinutes,
   maxDistanceKm:liveLocation?maxDistanceKm:undefined,
   openNowOnly,
-  includeVisited
- },60),[availableMinutes,day,includeVisited,liveLocation,maxDistanceKm,nearbyQuery,now,openNowOnly,selectedArea,selectedCategory,selectedPriority,selectedRegion,state]);
+  includeVisited,
+  foodOnly:nearbyMode==='food',
+  dietaryMode:nearbyMode==='food'?dietaryMode:'all',
+  specialtyOnly:nearbyMode==='food'&&specialtyOnly
+ },60),[availableMinutes,day,dietaryMode,includeVisited,liveLocation,maxDistanceKm,nearbyMode,nearbyQuery,now,openNowOnly,selectedArea,selectedCategory,selectedPriority,selectedRegion,specialtyOnly,state]);
  function add(place:Place){
   onAddToItinerary(place,targetDayIndex);
   setAddedMessage(`${place.name} was added to ${state.days[targetDayIndex].label} as a flexible stop.`);
  }
+ function applyFoodPreset(preset:'easy'|'quick'|'local'|'late'|'before'|'all'){
+  setNearbyMode('food');
+  setSelectedCategory('All');
+  setNearbyQuery('');
+  setSelectedPriority('All');
+  setIncludeVisited(false);
+  setSpecialtyOnly(false);
+  setActiveCustomPresetId('');
+  setPresetName('');
+  setActiveFoodPreset(preset);
+  if(preset==='easy'){setDietaryMode('easier');setAvailableMinutes(60);setMaxDistanceKm(2);setOpenNowOnly(true);}
+  if(preset==='quick'){setDietaryMode('easier-or-unknown');setAvailableMinutes(30);setMaxDistanceKm(1);setOpenNowOnly(true);}
+  if(preset==='local'){setDietaryMode('all');setAvailableMinutes(90);setMaxDistanceKm(5);setOpenNowOnly(true);setSpecialtyOnly(true);}
+  if(preset==='late'){setDietaryMode('easier-or-unknown');setAvailableMinutes(120);setMaxDistanceKm(5);setOpenNowOnly(true);}
+  if(preset==='before'){setDietaryMode('easier-or-unknown');setAvailableMinutes(automaticGapMinutes);setMaxDistanceKm(2);setOpenNowOnly(true);}
+  if(preset==='all'){setDietaryMode('all');setAvailableMinutes(240);setMaxDistanceKm(15);setOpenNowOnly(false);}
+ }
+ function applyCustomPreset(preset:NearbyPreset){
+  setNearbyMode(preset.foodOnly?'food':'all');setNearbyQuery(preset.query);setSelectedRegion(preset.region);setSelectedArea(preset.area);setSelectedCategory(preset.category);setSelectedPriority(preset.priority);setAvailableMinutes(preset.availableMinutes);setMaxDistanceKm(preset.maxDistanceKm);setOpenNowOnly(preset.openNowOnly);setIncludeVisited(preset.includeVisited);setDietaryMode(preset.dietaryMode);setSpecialtyOnly(Boolean(preset.specialtyOnly));setActiveFoodPreset(null);setActiveCustomPresetId(preset.id);setPresetName(preset.name);
+ }
+ function currentPreset(id:string,name:string):NearbyPreset{return {id,name,foodOnly:nearbyMode==='food',query:nearbyQuery,region:selectedRegion,area:selectedArea,category:selectedCategory,priority:selectedPriority,availableMinutes,maxDistanceKm,openNowOnly,includeVisited,dietaryMode,specialtyOnly};}
+ function saveCustomPreset(){
+  const name=presetName.trim();
+  if(!name)return;
+  const id=activeCustomPresetId||`nearby-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  onSavePreset(currentPreset(id,name));setActiveCustomPresetId(id);setPresetName(name);setActiveFoodPreset(null);
+ }
  return <section className="nearbyPage">
-  <div className="pageIntro"><div><div className="eyebrow">NEARBY EXPLORER</div><h2>What sounds good nearby?</h2><p className="muted">Browse possibilities without committing to them. Closed places and options that do not fit your available time can stay out of the way.</p></div><span className="chip">{results.length} option{results.length===1?'':'s'}</span></div>
+  <div className="pageIntro"><div><div className="eyebrow">{nearbyMode==='food'?'FOOD NEARBY':'NEARBY EXPLORER'}</div><h2>{nearbyMode==='food'?'Where should we eat right now?':'What sounds good nearby?'}</h2><p className="muted">{nearbyMode==='food'?'Restaurant ideas ranked by timing, location, hours, saved priority, and practical dietary fit.':'Browse possibilities without committing to them. Closed places and options that do not fit your available time can stay out of the way.'}</p></div><span className="chip">{results.length} option{results.length===1?'':'s'}</span></div>
+  <div className="nearbyModeTabs" role="group" aria-label="Nearby result type"><button className={nearbyMode==='all'?'active':''} onClick={()=>setNearbyMode('all')}>All nearby</button><button className={nearbyMode==='food'?'active':''} onClick={()=>{setNearbyMode('food');setSelectedCategory('All');}}>Food nearby</button></div>
+  {nearbyMode==='food'&&<div className="card foodNearbyContext"><div><strong>{activeDietaryPreferences.length?`Using ${activeDietaryPreferences.map(dietaryPreferenceLabel).join(' + ')}`:'No dietary preferences selected'}</strong><p className="muted small">Unknown restaurants stay visible unless you choose a stricter fit filter.</p></div>{mealBalanceActive&&<div className="foodBalanceNotice">{triedToday.length?`You tried ${triedToday.map(food=>food.title).join(' + ')} today. `:'Today’s treat is noted. '}Easier options receive a gentle ranking boost; nothing is hidden.</div>}</div>}
+  {nearbyMode==='food'&&<div className="card foodPresetPanel"><div><strong>Quick starting points</strong><p className="muted small">Each preset only adjusts the visible filters below. Fine-tune anything afterward.</p></div><div className="foodPresetButtons"><button className={activeFoodPreset==='easy'?'active':''} onClick={()=>applyFoodPreset('easy')}>Easy meal nearby</button><button className={activeFoodPreset==='quick'?'active':''} onClick={()=>applyFoodPreset('quick')}>Quick bite</button><button className={activeFoodPreset==='local'?'active':''} onClick={()=>applyFoodPreset('local')}>Local specialty</button><button className={activeFoodPreset==='late'?'active':''} onClick={()=>applyFoodPreset('late')}>Late-night food</button><button className={activeFoodPreset==='before'?'active':''} onClick={()=>applyFoodPreset('before')}>Before next reservation</button><button className={activeFoodPreset==='all'?'active':''} onClick={()=>applyFoodPreset('all')}>Show everything</button></div>{activeFoodPreset==='before'&&<span className="presetStatus">Using about {automaticGapMinutes} minutes before the next scheduled plan.</span>}</div>}
+  <details className="card savedPresetPanel" open={Boolean(activeCustomPresetId)}><summary><span><strong>My Nearby presets</strong><small>{state.nearbyPresets?.length??0} saved</small></span></summary><div className="savedPresetBody"><p className="muted small">Save this exact combination of mode, location, timing, hours, dietary, and specialty filters.</p><div className="presetSaveRow"><input className="field" value={presetName} onChange={event=>setPresetName(event.target.value)} placeholder="Preset name, such as Waterfront lunch"/><button className="btn primary" disabled={!presetName.trim()} onClick={saveCustomPreset}>{activeCustomPresetId?'Update preset':'Save new preset'}</button>{activeCustomPresetId&&<button className="btn" onClick={()=>{setActiveCustomPresetId('');setPresetName('');}}>Save as new</button>}</div><div className="savedPresetList">{(state.nearbyPresets??[]).map(preset=><div className={preset.id===activeCustomPresetId?'active':''} key={preset.id}><button className="presetApply" onClick={()=>applyCustomPreset(preset)}><strong>{preset.name}</strong><span>{preset.foodOnly?'Food':'All places'} · {preset.region}{preset.specialtyOnly?' · Local specialties':''}</span></button><button className="textButton" onClick={()=>onSetDefaultPreset(state.defaultNearbyPresetId===preset.id?undefined:preset.id)}>{state.defaultNearbyPresetId===preset.id?'★ Default':'Make default'}</button><button className="textButton dangerText" onClick={()=>{if(window.confirm(`Delete “${preset.name}”?`)){onDeletePreset(preset.id);if(activeCustomPresetId===preset.id){setActiveCustomPresetId('');setPresetName('');}}}}>Delete</button></div>)}</div>{!(state.nearbyPresets?.length)&&<span className="muted small">No custom presets yet. Adjust the filters, give the setup a name, and save it.</span>}</div></details>
   <div className="card nearbyControls">
    <div className="nearbyLocationPanel">
     <div><strong>{liveLocation?'Using your current location':'Choose an area or use your location'}</strong><p className="muted small">{liveLocation?'Results with saved coordinates are sorted by distance. Your location is not saved.':'Neighborhood mode works even when a place does not have coordinates yet.'}</p>{locationMessage&&<span className="locationError" role="status">{locationMessage}</span>}</div>
@@ -1129,27 +1599,30 @@ function NearbyExplorer({state,currentDayIndex,now,liveLocation,locationStatus,l
     <label>Search<input className="field" value={nearbyQuery} onChange={event=>setNearbyQuery(event.target.value)} placeholder="Coffee, museum, poutine…"/></label>
     <label>Region<select className="field" value={selectedRegion} onChange={event=>{setSelectedRegion(event.target.value);setSelectedArea('All');}}><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select></label>
     <label>Neighborhood<select className="field" value={selectedArea} onChange={event=>setSelectedArea(event.target.value)}><option>All</option>{areaChoices.map(value=><option value={value} key={value}>{value}</option>)}</select></label>
-    <label>Category<select className="field" value={selectedCategory} onChange={event=>setSelectedCategory(event.target.value)}><option>All</option>{[...new Set(state.places.map(place=>place.category))].sort().map(value=><option value={value} key={value}>{value}</option>)}</select></label>
+    {nearbyMode==='all'&&<label>Category<select className="field" value={selectedCategory} onChange={event=>setSelectedCategory(event.target.value)}><option>All</option>{[...new Set(state.places.map(place=>place.category))].sort().map(value=><option value={value} key={value}>{value}</option>)}</select></label>}
+    {nearbyMode==='food'&&activeDietaryPreferences.length>0&&<label>Dietary fit<select className="field" value={dietaryMode} onChange={event=>setDietaryMode(event.target.value as typeof dietaryMode)}><option value="easier-or-unknown">Easier + not evaluated</option><option value="easier">Easy or workable only</option><option value="easy">Easy only</option><option value="difficult">Difficult only</option><option value="all">Show all food places</option></select></label>}
     <label>Priority<select className="field" value={selectedPriority} onChange={event=>setSelectedPriority(event.target.value as typeof selectedPriority)}><option>All</option><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></label>
-    <label>Time available<select className="field" value={availableMinutes} onChange={event=>setAvailableMinutes(Number(event.target.value))}><option value={30}>30 minutes</option><option value={60}>1 hour</option><option value={90}>90 minutes</option><option value={120}>2 hours</option><option value={240}>Half day</option></select></label>
+    <label>Time available<select className="field" value={availableMinutes} onChange={event=>setAvailableMinutes(Number(event.target.value))}>{![30,60,90,120,240].includes(availableMinutes)&&<option value={availableMinutes}>{availableMinutes} minutes</option>}<option value={30}>30 minutes</option><option value={60}>1 hour</option><option value={90}>90 minutes</option><option value={120}>2 hours</option><option value={240}>Half day</option></select></label>
     {liveLocation&&<label>Maximum distance<select className="field" value={maxDistanceKm} onChange={event=>setMaxDistanceKm(Number(event.target.value))}><option value={0.5}>500 m</option><option value={1}>1 km</option><option value={2}>2 km</option><option value={5}>5 km</option><option value={15}>15 km</option></select></label>}
     <label>Add results to<select className="field" value={targetDayIndex} onChange={event=>setTargetDayIndex(Number(event.target.value))}>{state.days.map((tripDay,index)=><option value={index} key={tripDay.date}>{tripDay.label} · {tripDay.city}</option>)}</select></label>
    </div>
-   <div className="nearbyToggles"><label className="toggleLine"><input type="checkbox" checked={openNowOnly} onChange={event=>setOpenNowOnly(event.target.checked)}/> Open now or hours not required</label><label className="toggleLine"><input type="checkbox" checked={includeVisited} onChange={event=>setIncludeVisited(event.target.checked)}/> Include visited places</label></div>
+   <div className="nearbyToggles"><label className="toggleLine"><input type="checkbox" checked={openNowOnly} onChange={event=>setOpenNowOnly(event.target.checked)}/> Open now or hours not required</label><label className="toggleLine"><input type="checkbox" checked={includeVisited} onChange={event=>setIncludeVisited(event.target.checked)}/> Include visited places</label>{nearbyMode==='food'&&<label className="toggleLine"><input type="checkbox" checked={specialtyOnly} onChange={event=>{setSpecialtyOnly(event.target.checked);setActiveFoodPreset(null);}}/> Local specialties only</label>}</div>
    {addedMessage&&<div className="nearbyAdded" role="status"><span>✓</span>{addedMessage}<button className="textButton" onClick={()=>setAddedMessage('')}>Dismiss</button></div>}
   </div>
   <div className="grid nearbyGrid">
-   {results.map(suggestion=>{const open=placeOpenStatus(suggestion.place,now);const directions=mapsUrl(suggestion.place.formattedAddress||suggestion.place.name);const displayArea=suggestion.place.area??suggestPlaceArea(suggestion.place);return <article className={`card nearbyCard ${suggestion.place.visited?'visited':''}`} key={suggestion.place.id}>
+   {results.map(suggestion=>{const open=placeOpenStatus(suggestion.place,now);const directions=mapsUrl(suggestion.place.formattedAddress||suggestion.place.name);const displayArea=suggestion.place.area??suggestPlaceArea(suggestion.place);const specialties=placeSpecialtyFoods(suggestion.place,state.foods);const allActiveRatings=activeDietaryPreferences.map(preference=>dietaryRating(suggestion.place,preference)??{preference,fit:'unknown' as const,tip:undefined});const displayedRatings=nearbyMode==='food'?allActiveRatings:allActiveRatings.filter(rating=>rating.fit!=='unknown'&&rating.fit!=='not-applicable');return <article className={`card nearbyCard ${suggestion.place.visited?'visited':''}`} key={suggestion.place.id}>
     <div className="between"><span className={`priority priority-${suggestion.place.priority}`}>{suggestion.place.priority==='must'?'Must do':suggestion.place.priority}</span><span className={`hoursStatus hours-${open.status==='ignored'?'unknown':open.status}`}>{open.status==='open'?'Open now':open.status==='closed'?'Closed now':open.status==='ignored'?'Hours not needed':'Hours unknown'}</span></div>
     <h3>{suggestion.place.name}</h3>
     <div className="placeLocationMeta"><span className="chip neutral">{suggestion.place.category}</span>{displayArea&&<span className="areaBadge">{displayArea.split(' — ').at(-1)}</span>}</div>
+    {specialties.length>0&&<div className="specialtyRow"><strong>Local foods</strong>{specialties.map(food=><span className="specialtyBadge" key={food.id}>{food.title}</span>)}</div>}
     <p className="nearbyFacts"><strong>{suggestion.estimatedDuration} min</strong>{suggestion.distanceKm!==undefined&&<span>{suggestion.distanceKm<1?`${Math.max(50,Math.round(suggestion.distanceKm*1000/50)*50)} m away`:`${suggestion.distanceKm.toFixed(1)} km away`}</span>}{suggestion.walkingMinutes!==undefined&&<span>≈ {suggestion.walkingMinutes} min walk</span>}</p>
+    {displayedRatings.length>0&&<div className="nearbyDietary"><div className="dietBadgeRow">{displayedRatings.map(rating=><span className={`dietBadge diet-${rating.fit}`} key={rating.preference}><i/>{dietaryPreferenceLabel(rating.preference)}: {dietaryFitLabel(rating.fit)}</span>)}</div>{displayedRatings.some(rating=>rating.tip)&&<p><strong>Best bet:</strong> {displayedRatings.find(rating=>rating.tip)?.tip}</p>}</div>}
     {suggestion.place.notes&&<p className="muted small">{suggestion.place.notes}</p>}
     <div className="whyBox"><strong>Why it fits</strong><ul>{suggestion.reasons.slice(0,3).map(reason=><li key={reason}>{reason}</li>)}</ul></div>
     <div className="nearbyCardActions"><a className="btn" href={directions} target="_blank" rel="noreferrer">Transit directions</a><button className="btn primary" onClick={()=>add(suggestion.place)}>Add to {state.days[targetDayIndex].label}</button><button className="textButton" onClick={()=>onShowPlace(suggestion.place)}>Details</button><button className="textButton" onClick={()=>onVisited(suggestion.place.id)}>{suggestion.place.visited?'Mark unvisited':'Mark visited'}</button></div>
    </article>;})}
   </div>
-  {!results.length&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">⌖</div><h2>No saved places match this combination.</h2><p className="muted">Try a larger area, a longer time window, or turn off “Open now.”</p></div>}
+  {!results.length&&<div className="card assistantEmpty"><div className="assistantEmptyIcon">⌖</div><h2>No saved {nearbyMode==='food'?'food ':''}places match this combination.</h2><p className="muted">Try a larger area, a longer time window, a broader dietary-fit setting, or turn off “Open now.”</p></div>}
  </section>;
 }
 
@@ -1283,7 +1756,7 @@ function HoursManager({places,days,onUpdated,onIgnoreHours,onOpenPlace}:{places:
  </section>;
 }
 
-function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDuplicate,onDelete,tripDates}:{place:Place;onToggle:()=>void;onEdit?:(changes:Partial<Place>)=>void;onEditHours?:(day:Weekday,changes:{open?:string;close?:string;closed?:boolean})=>void;onSave?:()=>void;onGoogleUpdate?:(place:Place)=>void;onDuplicate?:()=>void;onDelete?:()=>void;tripDates?:TripState['days']}){
+function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDuplicate,onDelete,tripDates,tripFoods}:{place:Place;onToggle:()=>void;onEdit?:(changes:Partial<Place>)=>void;onEditHours?:(day:Weekday,changes:{open?:string;close?:string;closed?:boolean})=>void;onSave?:()=>void;onGoogleUpdate?:(place:Place)=>void;onDuplicate?:()=>void;onDelete?:()=>void;tripDates?:TripState['days'];tripFoods?:CheckItem[]}){
  const [editing,setEditing]=useState(false);
  const [saved,setSaved]=useState(false);
  const [refreshing,setRefreshing]=useState(false);
@@ -1291,6 +1764,7 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDu
  const hoursCount=Object.keys(place.weeklyHours??{}).length;
  const openStatus=placeOpenStatus(place,new Date());
  const areaSuggestion=!place.area?suggestPlaceArea(place):undefined;
+ const linkedSpecialties=tripFoods?placeSpecialtyFoods(place,tripFoods):[];
  function save(){
   onSave?.();
   setSaved(true);
@@ -1299,6 +1773,10 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDu
  function edit(changes:Partial<Place>,saveImmediately=false){
   onEdit?.(changes);
   if(saveImmediately)window.setTimeout(save,0);
+ }
+ function editDietary(preference:DietaryPreference,changes:{fit?:DietaryFit;tip?:string},saveImmediately=false){
+  const existing=dietaryRating(place,preference);
+  edit({dietaryRatings:setDietaryRating(place,preference,changes.fit??existing?.fit??'unknown',changes.tip??existing?.tip??'')},saveImmediately);
  }
  async function refreshFromGoogle(){
   const storedSecret=sessionStorage.getItem('places-refresh-secret');
@@ -1326,6 +1804,9 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDu
   {place.formattedAddress&&<div className="muted small">{place.formattedAddress}</div>}
   {place.notes&&<p>{place.notes}</p>}
   {place.tags.length>0&&<div className="tagRow">{place.tags.slice(0,4).map(tag=><span className="chip neutral" key={tag}>{tag}</span>)}</div>}
+  {linkedSpecialties.length>0&&<div className="specialtyRow"><strong>Local foods</strong>{linkedSpecialties.map(food=><span className="specialtyBadge" key={food.id}>{food.title}</span>)}</div>}
+  {place.dietaryRatings?.some(rating=>rating.fit!=='unknown')&&<div className="dietBadgeRow">{place.dietaryRatings.filter(rating=>rating.fit!=='unknown').map(rating=><span className={`dietBadge diet-${rating.fit}`} title={rating.tip} key={rating.preference}><i/>{dietaryPreferenceLabel(rating.preference)}: {dietaryFitLabel(rating.fit)}</span>)}</div>}
+  {place.dietaryRatings?.some(rating=>rating.tip)&&<div className="dietTipList">{place.dietaryRatings.filter(rating=>rating.tip).map(rating=><p key={rating.preference}><strong>{dietaryPreferenceLabel(rating.preference)} best bet:</strong> {rating.tip}</p>)}</div>}
   <div className="placeActions"><a className="btn primary" href={place.mapUrl||`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}`} target="_blank" rel="noreferrer">Directions</a>{place.menuUrl&&<a className="btn" href={place.menuUrl} target="_blank" rel="noreferrer">Menu</a>}{place.websiteUrl&&<a className="btn" href={place.websiteUrl} target="_blank" rel="noreferrer">Website</a>}{onEdit&&<button className="btn" onClick={()=>setEditing(value=>!value)}>{editing?'Close editor':'Edit place'}</button>}</div>
   {editing&&onEdit&&onEditHours&&<div className="placeEditor">
    <div className="placeEditorGrid">
@@ -1336,6 +1817,7 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDu
     <label>Priority<select className="field" value={place.priority} onChange={event=>edit({priority:event.target.value as Place['priority']},true)}><option value="must">Must do</option><option value="possible">Possible</option><option value="backup">Backup</option></select></label>
     <label>Visit time (minutes)<input className="field" type="number" min="5" step="5" value={place.estimatedDuration??60} onChange={event=>edit({estimatedDuration:Number(event.target.value)})} onBlur={save}/></label>
     <label>Time zone<input className="field" value={place.hoursTimeZone??'America/Toronto'} onChange={event=>edit({hoursTimeZone:event.target.value})} onBlur={save}/></label>
+    <label>Food place<select className="field" value={place.foodPlace===true?'food':place.foodPlace===false?'not-food':'auto'} onChange={event=>edit({foodPlace:event.target.value==='auto'?undefined:event.target.value==='food'},true)}><option value="auto">Auto detect</option><option value="food">Food place</option><option value="not-food">Not food</option></select></label>
     <label className="toggleLine placeHoursToggle"><input type="checkbox" checked={Boolean(place.ignoreHours)} onChange={event=>edit({ignoreHours:event.target.checked},true)}/> Ignore opening hours</label>
    </div>
    <label>Notes<textarea className="field" rows={3} value={place.notes} onChange={event=>edit({notes:event.target.value})} onBlur={save}/></label>
@@ -1346,6 +1828,8 @@ function PlaceCard({place,onToggle,onEdit,onEditHours,onSave,onGoogleUpdate,onDu
     <label>Tags<input className="field" value={place.tags.join(', ')} onChange={event=>edit({tags:event.target.value.split(',').map(tag=>tag.trim()).filter(Boolean)})} onBlur={save}/></label>
    </div>
    {tripDates&&<fieldset className="recommendedDates"><legend>Recommended trip days</legend><div>{tripDates.map(day=><label className="toggleLine" key={day.date}><input type="checkbox" checked={place.recommendedDates?.includes(day.date)??false} onChange={event=>{const dates=new Set(place.recommendedDates??[]);if(event.target.checked)dates.add(day.date);else dates.delete(day.date);edit({recommendedDates:[...dates]},true);}}/> {day.label}</label>)}</div></fieldset>}
+   {tripFoods&&tripFoods.length>0&&<fieldset className="specialtyEditor"><legend>Local foods served here</legend><p className="muted small">Connect this place to the trip foods it is known for. These links power the Local specialty preset.</p><div>{tripFoods.map(food=><label className="toggleLine" key={food.id}><input type="checkbox" checked={place.specialtyFoodIds?.includes(food.id)??false} onChange={event=>{const ids=new Set(place.specialtyFoodIds??[]);if(event.target.checked)ids.add(food.id);else ids.delete(food.id);edit({specialtyFoodIds:[...ids]},true);}}/> {food.title}</label>)}</div></fieldset>}
+   <fieldset className="dietaryEditor"><legend>Dietary guidance</legend><p className="muted small">Practical guidance only—not a medical “safe” designation. Unknown means this place has not been evaluated.</p><div className="dietaryEditorRows">{dietaryPreferences.map(preference=>{const rating=dietaryRating(place,preference.id)??{preference:preference.id,fit:'unknown' as const,tip:''};return <div className="dietaryEditorRow" key={preference.id}><strong>{preference.label}</strong><select className="field" value={rating.fit} onChange={event=>editDietary(preference.id,{fit:event.target.value as DietaryFit},true)}>{dietaryFits.map(fit=><option value={fit.id} key={fit.id}>{fit.label}</option>)}</select><input className="field" value={rating.tip??''} placeholder="Best bet or ordering tip" onChange={event=>editDietary(preference.id,{tip:event.target.value})} onBlur={save}/></div>;})}</div></fieldset>
    <div className={`hoursEditor ${place.ignoreHours?'hoursEditorIgnored':''}`}>
     <div className="between"><div><strong>Weekly hours</strong><p className="muted small">{place.ignoreHours?'Hours checks are disabled. Google refresh can still update its address and location.':'Used to prevent closed-place suggestions.'}</p></div><div className="placeActions"><button className="btn primary" onClick={refreshFromGoogle} disabled={refreshing}>{refreshing?'Refreshing…':'Refresh Google data'}</button><button className="btn" disabled={place.ignoreHours} onClick={()=>edit({hoursVerifiedAt:new Date().toISOString(),hoursSource:'manual'},true)}>Mark verified today</button></div></div>
     {refreshMessage&&<p className="muted small" role="status">{refreshMessage}</p>}

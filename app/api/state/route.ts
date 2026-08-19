@@ -1,6 +1,10 @@
 import {NextResponse} from 'next/server';
+import {cookies} from 'next/headers';
 import {loadState,saveState} from '@/lib/db';
 import {initialState} from '@/data/initial';
+import {applyDietaryGuidance} from '@/lib/dietary-guidance';
+import {validToken} from '@/lib/auth';
+import {publicTripState} from '@/lib/public-state';
 import type {TripState} from '@/lib/types';
 
 function mergeState(stored:TripState):TripState{
@@ -26,21 +30,28 @@ function mergeState(stored:TripState):TripState{
   ...initialState,
   ...stored,
   days:[...days,...customDays],
-  places:stored.places?.length?stored.places:initialState.places
+  places:applyDietaryGuidance(stored.places?.length?stored.places:initialState.places)
  };
 }
+
+async function editorRequest(){return validToken((await cookies()).get('trip_auth')?.value);}
 
 export async function GET(){
  try{
   const stored=await loadState();
-  return NextResponse.json({state:stored?mergeState(stored):initialState,cloud:true});
+  const state=stored?mergeState(stored):{...initialState,places:applyDietaryGuidance(initialState.places)};
+  const editor=await editorRequest();
+  return NextResponse.json({state:editor?state:publicTripState(state),cloud:true,editor});
  }catch(error){
   console.error('Trip state load failed; using local fallback.',error);
-  return NextResponse.json({state:initialState,cloud:false});
+  const state={...initialState,places:applyDietaryGuidance(initialState.places)};
+  const editor=await editorRequest();
+  return NextResponse.json({state:editor?state:publicTripState(state),cloud:false,editor});
  }
 }
 
 export async function PUT(req:Request){
+ if(!(await editorRequest()))return NextResponse.json({ok:false,cloud:false,error:'Editor access required'},{status:401});
  try{
   const state=await req.json();
   const saved=await saveState(state);

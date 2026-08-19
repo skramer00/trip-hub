@@ -1,4 +1,4 @@
-const CACHE_NAME='trip-hub-v2';
+const CACHE_NAME='trip-hub-v3';
 const CORE_URLS=['/','/manifest.webmanifest','/icon'];
 
 self.addEventListener('install',event=>{
@@ -40,7 +40,7 @@ async function cacheTrip(){
  await cache.put('/',page.clone());
  const html=await page.text();
  const assets=[...html.matchAll(/(?:src|href)="(\/_next\/static\/[^"]+)"/g)].map(match=>match[1]);
- const urls=[...new Set([...CORE_URLS,...assets,'/api/state'])];
+ const urls=[...new Set([...CORE_URLS,...assets])];
  const results=await Promise.allSettled(urls.map(async url=>{
   const response=await fetch(url,{cache:'reload'});
   if(!response.ok)throw new Error(`${url} returned ${response.status}`);
@@ -56,7 +56,11 @@ self.addEventListener('fetch',event=>{
  if(request.method!=='GET')return;
  const url=new URL(request.url);
  if(url.origin!==self.location.origin)return;
- if(request.mode==='navigate'||url.pathname==='/api/state'){
+ if(url.pathname==='/api/state'){
+  event.respondWith(fetch(request));
+  return;
+ }
+ if(request.mode==='navigate'){
   event.respondWith(networkFirst(request));
   return;
  }

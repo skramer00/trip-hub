@@ -1,10 +1,11 @@
 import {gunzipSync} from 'node:zlib';
 import {compressedPlaces} from './placesCompressed';
+import {applyDietaryGuidance} from '@/lib/dietary-guidance';
 import type {ItineraryItem,Place,TripDay,TripState} from '@/lib/types';
 
 type CompactPlace=[string,0|1,string,string,string,string[],'must'|'possible'|'backup',string[]];
 const compact=JSON.parse(gunzipSync(Buffer.from(compressedPlaces,'base64')).toString('utf8')) as CompactPlace[];
-const places:Place[]=compact.map((p,index)=>({id:`place-${String(index+1).padStart(3,'0')}`,name:p[0],region:p[1]===0?'Toronto':'Niagara & Buffalo',category:p[2],notes:p[3],mapUrl:p[4].startsWith('http')?p[4]:`https://www.google.com/maps/place/${p[4]}`,menuUrl:'',websiteUrl:'',tags:p[5],priority:p[6],visited:false,recommendedDates:p[7]}));
+const places:Place[]=applyDietaryGuidance(compact.map((p,index)=>({id:`place-${String(index+1).padStart(3,'0')}`,name:p[0],region:p[1]===0?'Toronto':'Niagara & Buffalo',category:p[2],notes:p[3],mapUrl:p[4].startsWith('http')?p[4]:`https://www.google.com/maps/place/${p[4]}`,menuUrl:'',websiteUrl:'',tags:p[5],priority:p[6],visited:false,recommendedDates:p[7]})));
 
 const transit=(destination:string,routeText:string)=>({mapUrl:`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=transit`,routeText});
 const routeById:Record<string,Pick<ItineraryItem,'mapUrl'|'routeText'>>={
