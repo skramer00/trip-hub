@@ -152,6 +152,8 @@ export default function TripApp(){
  const [publicUrl,setPublicUrl]=useState('');
  const [qrCode,setQrCode]=useState('');
  const [shareMessage,setShareMessage]=useState('');
+ const [showDailyBrief,setShowDailyBrief]=useState(false);
+ const [briefDayIndex,setBriefDayIndex]=useState(0);
 
  useEffect(()=>{
   let active=true;
@@ -744,9 +746,9 @@ export default function TripApp(){
    {!editorView&&tripSettings.publicMessage&&<section className="card publicWelcome"><div className="eyebrow">WELCOME TO OUR TRIP</div><p>{tripSettings.publicMessage}</p></section>}
    <nav className="tabs mainTabs" aria-label="Trip sections">{visibleNavGroups.map(group=><button key={group.label} className={activeNavGroup.label===group.label?'active':''} onClick={()=>setTab(group.tabs[0])}>{group.label}</button>)}</nav>
    {activeNavGroup.tabs.length>1&&<nav className="subTabs" aria-label={`${activeNavGroup.label} views`}>{activeNavGroup.tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{item==='Places'?'Saved Places':item}</button>)}</nav>}
-   {tab==='Overview'&&<TripOverview state={state} settings={tripSettings} canEdit={editorView} onToday={()=>setTab('Today')} onEditDay={()=>setTab('Itinerary')}/>}
+   {tab==='Overview'&&<TripOverview state={state} settings={tripSettings} canEdit={editorView} onToday={()=>setTab('Today')} onBrief={index=>{setBriefDayIndex(index);setShowDailyBrief(true);}} onEditDay={()=>setTab('Itinerary')}/>}
    {tab==='Today'&&currentDay&&<section>
-   <div className="todayHero card"><div><div className="eyebrow">TODAY</div><h2>{currentDay.label} · {currentDay.city}</h2><p className="muted">Recommendations below are selected for this specific itinerary day.</p></div><div className="progressRing" aria-label={`${completedToday} of ${totalToday} complete`}><strong>{completedToday}/{totalToday}</strong><span>done</span></div></div>
+   <div className="todayHero card"><div><div className="eyebrow">TODAY</div><h2>{currentDay.label} · {currentDay.city}</h2><p className="muted">Recommendations below are selected for this specific itinerary day.</p>{editorView&&<button className="btn dailyBriefOpen" onClick={()=>{setBriefDayIndex(currentDayIndex);setShowDailyBrief(true);}}>Open daily brief</button>}</div><div className="progressRing" aria-label={`${completedToday} of ${totalToday} complete`}><strong>{completedToday}/{totalToday}</strong><span>done</span></div></div>
     {editorView&&<MealBalanceCard date={currentDay.date} value={state.mealBalanceByDate?.[currentDay.date]} triedFoods={foodsTriedOnDate(state,currentDay.date)} onChange={updateMealBalance}/>}
     {editorView&&<QuickCapture date={currentDay.date} places={state.places} foods={state.foods} onSave={saveJournalMoment} onDelete={deleteJournalMoment}/>}
     {editorView&&readiness&&<TripReadinessDashboard readiness={readiness} onOpen={target=>setTab(target)}/>}
@@ -802,18 +804,74 @@ export default function TripApp(){
    }}/>}
    {tab==='Checklist'&&<section><div className="pageIntro"><div><div className="eyebrow">PACK SMART</div><h2>Nothing important left behind</h2></div><span className="chip">{state.packing.filter(i=>i.done).length}/{state.packing.length} packed</span></div>{[...new Set(state.packing.map(i=>i.category))].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.packing.map((item,index)=>item.category===group&&<label className={`card checkCard ${item.done?'done':''}`} key={item.id}><input type="checkbox" checked={item.done} onChange={()=>toggleList('packing',index)}/><div>{item.title}</div></label>)}</div></div>)}</section>}
   </main>
+  {editorView&&showDailyBrief&&<DailyBrief state={state} initialDayIndex={briefDayIndex} onClose={()=>setShowDailyBrief(false)} onOffline={downloadOffline}/>}
   {showSharePanel&&<div className="editorUnlockBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setShowSharePanel(false);}}><section className="card shareAccessPanel" role="dialog" aria-modal="true" aria-labelledby="share-access-title"><button className="editorUnlockClose" aria-label="Close share and access" onClick={()=>setShowSharePanel(false)}>×</button><div className="eyebrow">SHARE & ACCESS</div><div className="shareAccessHeading"><div><h2 id="share-access-title">Invite people into the trip</h2><p className="muted">Visitors can browse the public itinerary, places, food list, and recap without seeing private planning details.</p></div><span className={`accessModeBadge ${editorView?'editing':'public'}`}>{editorView?'Editing unlocked':'Public view'}</span></div><div className="shareAccessGrid"><div className="shareLinkCard"><strong>Public trip link</strong><div className="shareUrl"><span>{publicUrl||'Loading link…'}</span><button className="btn primary" onClick={copyPublicLink} disabled={!publicUrl}>Copy</button></div><div className="shareButtons"><button className="btn" onClick={sharePublicLink} disabled={!publicUrl}>Share from this device</button>{isEditor&&<button className="btn" onClick={enterPublicPreview}>Preview public view</button>}</div>{shareMessage&&<p className="shareMessage" role="status">{shareMessage}</p>}</div><div className="qrCard"><div className="qrFrame">{qrCode?<Image src={qrCode} alt="QR code for the public Trip Hub link" width={180} height={180} unoptimized/>:<span>Preparing QR code…</span>}</div><small>Scan to open the public trip</small></div></div><div className="privacySummary"><div><span className="privacyIcon public">✓</span><div><strong>Visitors can see</strong><p>Public itinerary, saved places, food ideas, nearby suggestions, and the trip recap.</p></div></div><div><span className="privacyIcon private">⌁</span><div><strong>Stays private</strong><p>Confirmation numbers, Key Info, personal notes, packing lists, dietary guidance, and editing tools.</p></div></div></div>{isEditor?<div className="shareAccessFooter"><div><strong>Editor session is active</strong><span>{publicPreview?'You are previewing the public experience.':'Your private editing tools are currently available on this device.'}</span></div><button className="btn dangerButton" onClick={lockEditor}>Lock editing now</button></div>:<div className="shareAccessFooter"><div><strong>Viewing publicly</strong><span>Use the shared PIN if you need to make changes.</span></div><button className="btn" onClick={()=>{setShowSharePanel(false);setAuthError('');setShowEditorUnlock(true);}}>Editor access</button></div>}</section></div>}
   {showEditorUnlock&&<div className="editorUnlockBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setShowEditorUnlock(false);}}><section className="card editorUnlock" role="dialog" aria-modal="true" aria-labelledby="editor-unlock-title"><button className="editorUnlockClose" aria-label="Close editor access" onClick={()=>setShowEditorUnlock(false)}>×</button><div className="eyebrow">PRIVATE EDITING</div><h2 id="editor-unlock-title">Unlock editor mode</h2><p className="muted">Enter the shared editor PIN to update plans, confirmations, private notes, dietary guidance, and checklists.</p><form onSubmit={unlockEditor}><label>Editor PIN<input className="field" type="password" autoFocus autoComplete="current-password" value={editorPin} onChange={event=>setEditorPin(event.target.value)}/></label>{authError&&<p className="error" role="alert">{authError}</p>}<button className="btn primary" disabled={authBusy||!editorPin}>{authBusy?'Unlocking…':'Unlock editing'}</button></form></section></div>}
  </>;
 }
 
-function TripOverview({state,settings,canEdit,onToday,onEditDay}:{state:TripState;settings:TripSettings;canEdit:boolean;onToday:()=>void;onEditDay:(date:string)=>void}){
+function TripOverview({state,settings,canEdit,onToday,onBrief,onEditDay}:{state:TripState;settings:TripSettings;canEdit:boolean;onToday:()=>void;onBrief:(dayIndex:number)=>void;onEditDay:(date:string)=>void}){
  const fixedPlans=state.days.reduce((total,day)=>total+day.items.filter(isFixedItem).length,0);
  return <section className="overviewPage"><div className="pageIntro overviewIntro"><div><div className="eyebrow">TRIP OVERVIEW</div><h2>The whole journey at a glance</h2><p className="muted">Browse each day, open routes, and expand only the details you need.</p></div><button className="btn primary" onClick={onToday}>Open today’s plan</button></div>
   <div className="overviewStats"><div><strong>{state.days.length}</strong><span>trip days</span></div><div><strong>{fixedPlans}</strong><span>timed anchors</span></div><div><strong>{state.places.length}</strong><span>saved places</span></div></div>
-  <div className="overviewTimeline">{state.days.map((day,index)=><details className="card overviewDay" key={day.date}><summary><span className="overviewMarker" aria-hidden="true">{index+1}</span><span className="overviewDayTitle"><small>{day.date}</small><strong>{day.label} · {day.city}</strong><em>{day.items.length} plan{day.items.length===1?'':'s'} · {day.items.filter(isFixedItem).length} timed</em></span><span className="overviewChevron" aria-hidden="true">⌄</span></summary><div className="overviewDayBody">{day.items.length?<ol>{day.items.map(item=><li key={item.id}><span className="overviewTime">{item.time}</span><div><div className="overviewItemTitle"><strong>{item.title}</strong>{isFixedItem(item)&&<span className="chip">Timed</span>}{item.optional&&<span className="chip neutral">Optional</span>}</div>{item.details&&<p>{item.details}</p>}{item.mapUrl&&<a className="textLink" href={item.mapUrl} target="_blank" rel="noreferrer">Open route ↗</a>}</div></li>)}</ol>:<p className="muted">This day is open for exploring.</p>}{canEdit&&<button className="btn overviewEdit" onClick={()=>onEditDay(day.date)}>Edit this day</button>}</div></details>)}</div>
+  <div className="overviewTimeline">{state.days.map((day,index)=><details className="card overviewDay" key={day.date}><summary><span className="overviewMarker" aria-hidden="true">{index+1}</span><span className="overviewDayTitle"><small>{day.date}</small><strong>{day.label} · {day.city}</strong><em>{day.items.length} plan{day.items.length===1?'':'s'} · {day.items.filter(isFixedItem).length} timed</em></span><span className="overviewChevron" aria-hidden="true">⌄</span></summary><div className="overviewDayBody">{day.items.length?<ol>{day.items.map(item=><li key={item.id}><span className="overviewTime">{item.time}</span><div><div className="overviewItemTitle"><strong>{item.title}</strong>{isFixedItem(item)&&<span className="chip">Timed</span>}{item.optional&&<span className="chip neutral">Optional</span>}</div>{item.details&&<p>{item.details}</p>}{item.mapUrl&&<a className="textLink" href={item.mapUrl} target="_blank" rel="noreferrer">Open route ↗</a>}</div></li>)}</ol>:<p className="muted">This day is open for exploring.</p>}{canEdit&&<div className="overviewDayActions"><button className="btn primary" onClick={()=>onBrief(index)}>Open daily brief</button><button className="btn overviewEdit" onClick={()=>onEditDay(day.date)}>Edit this day</button></div>}</div></details>)}</div>
   <div className="card overviewFooter"><div><strong>{settings.destinations}</strong><p className="muted small">{tripDateLabel(settings.startDate,settings.endDate)}</p></div><button className="textButton" onClick={onToday}>Go to the live day view →</button></div>
  </section>;
+}
+
+function briefLeaveBy(item:ItineraryItem){
+ if(!isFixedItem(item))return '';
+ const start=timeValue(item.time);
+ if(start===9999)return '';
+ let minutes=start-(item.travelMinutes??20)-(item.prepBuffer??15);
+ while(minutes<0)minutes+=24*60;
+ const hour24=Math.floor(minutes/60)%24;
+ const minute=minutes%60;
+ const suffix=hour24>=12?'PM':'AM';
+ const hour=hour24%12||12;
+ return `${hour}:${String(minute).padStart(2,'0')} ${suffix}`;
+}
+
+function briefHoursLabel(place:Place,date:string){
+ const moment=new Date(`${date}T12:00:00`);
+ const status=placeOpenStatus(place,moment,true).status;
+ if(status==='open')return 'Open around midday';
+ if(status==='closed')return 'Closed around midday';
+ if(status==='ignored')return 'Hours not needed';
+ return 'Check hours';
+}
+
+function DailyBrief({state,initialDayIndex,onClose,onOffline}:{state:TripState;initialDayIndex:number;onClose:()=>void;onOffline:()=>void}){
+ const [dayIndex,setDayIndex]=useState(initialDayIndex);
+ const [weather,setWeather]=useState<WeatherResponse|null>(null);
+ const day=state.days[dayIndex]??state.days[0];
+ useEffect(()=>{
+  if(!day?.date)return;
+  const controller=new AbortController();
+  setWeather(null);
+  fetch(`/api/weather?date=${encodeURIComponent(day.date)}`,{signal:controller.signal}).then(response=>response.ok?response.json():Promise.reject()).then((value:WeatherResponse)=>setWeather(value)).catch(()=>{});
+  return()=>controller.abort();
+ },[day?.date]);
+ if(!day)return null;
+ const fixedItems=day.items.filter(isFixedItem);
+ const hoursIssues=day.items.map(item=>checkItineraryHours(item,day.date,state.places)).filter((check):check is ItineraryHoursCheck=>Boolean(check&&(check.status==='closed'||check.status==='closesSoon')));
+ const hotelEntry=state.days.slice(0,dayIndex+1).flatMap(sourceDay=>sourceDay.items.filter(item=>inferItemType(item)==='hotel').map(item=>({day:sourceDay,item}))).at(-1);
+ const candidates=state.places.filter(place=>placeMatchesDay(place,day.city,day.date)&&!place.visited).sort((a,b)=>({must:0,possible:1,backup:2}[a.priority]-{must:0,possible:1,backup:2}[b.priority]));
+ const foodIdeas=candidates.filter(isFoodPlace).slice(0,3);
+ const activityIdeas=candidates.filter(place=>!isFoodPlace(place)&&!['Hotel','Transit'].includes(place.category)).slice(0,3);
+ const relevantCity=day.city.includes('Toronto')?'Toronto':day.city.includes('Buffalo')?'Buffalo':'Niagara Falls';
+ const forecast=weather?.forecasts.find(item=>item.city===relevantCity&&item.status==='available');
+ const packing=weatherPackingReminders(forecast);
+ function printBrief(){document.body.classList.add('printing-daily-brief');const cleanup=()=>document.body.classList.remove('printing-daily-brief');window.addEventListener('afterprint',cleanup,{once:true});window.print();window.setTimeout(cleanup,1500);}
+ const placeList=(title:string,places:Place[])=><section className="briefSection"><h3>{title}</h3>{places.length?<div className="briefIdeas">{places.map(place=><article key={place.id}><div><strong>{place.name}</strong><span>{place.area??place.region} · {briefHoursLabel(place,day.date)}</span></div><a className="textLink" href={place.mapUrl||`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}`} target="_blank" rel="noreferrer">Map ↗</a></article>)}</div>:<p className="muted small">No saved options needed here yet.</p>}</section>;
+ return <div className="dailyBriefBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose();}}><section className="dailyBrief card" role="dialog" aria-modal="true" aria-labelledby="daily-brief-title"><div className="dailyBriefToolbar"><label>Trip day<select className="field" value={dayIndex} onChange={event=>setDayIndex(Number(event.target.value))}>{state.days.map((option,index)=><option value={index} key={option.date}>{option.label} · {option.city}</option>)}</select></label><div className="placeActions"><button className="btn" onClick={onOffline}>Save offline</button><button className="btn primary" onClick={printBrief}>Print / Save PDF</button><button className="editorUnlockClose briefClose" aria-label="Close daily brief" onClick={onClose}>×</button></div></div>
+  <header className="dailyBriefHeader"><div><div className="eyebrow">DAILY TRAVEL BRIEF</div><h1 id="daily-brief-title">{day.label} · {day.city}</h1><p>{new Date(`${day.date}T12:00:00`).toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</p></div><div className="briefCount"><strong>{fixedItems.length}</strong><span>timed plans</span></div></header>
+  {forecast?<section className="briefWeather"><div><span aria-hidden="true">{forecast.kind==='clear'?'☀️':forecast.kind==='rain'?'🌧️':forecast.kind==='storm'?'⛈️':forecast.kind==='snow'?'🌨️':'⛅'}</span><div><strong>{forecast.summary}</strong><small>{Math.round(forecast.temperatureMax??0)}° / {Math.round(forecast.temperatureMin??0)}°F · {forecast.precipitationProbability??0}% precipitation</small></div></div>{packing.length>0&&<p>{packing.join(' ')}</p>}</section>:<section className="briefWeather unavailable"><strong>Forecast not available yet</strong><span>The rest of the brief is ready offline.</span></section>}
+  {hotelEntry&&<section className="briefHotel"><div><div className="eyebrow">YOUR BASE</div><h3>{hotelEntry.item.title}</h3>{hotelEntry.item.destination&&<p>{hotelEntry.item.destination}</p>}{(hotelEntry.item.keyInfo||hotelEntry.item.confirmationNumber)&&<p className="keyInfo"><strong>Key Info</strong><br/>{hotelEntry.item.keyInfo??hotelEntry.item.confirmationNumber}</p>}</div>{hotelEntry.item.mapUrl&&<a className="btn" href={hotelEntry.item.mapUrl} target="_blank" rel="noreferrer">Directions</a>}</section>}
+  <section className="briefSection"><h3>Today’s schedule</h3><div className="briefSchedule">{day.items.map(item=>{const leaveBy=briefLeaveBy(item);return <article className={item.optional?'optional':''} key={item.id}><span className="briefTime">{item.time}</span><div><div className="briefItemTitle"><strong>{item.title}</strong>{isFixedItem(item)&&<span className="chip">Timed</span>}{item.optional&&<span className="chip neutral">Optional</span>}</div>{item.details&&<p>{item.details}</p>}{leaveBy&&<p className="briefLeave">Plan to leave around {leaveBy} · {item.travelMinutes??20} min travel + {item.prepBuffer??15} min buffer</p>}{(item.keyInfo||item.confirmationNumber)&&<div className="briefKeyInfo"><strong>Key Info</strong><span>{item.keyInfo??item.confirmationNumber}</span></div>}{item.userNotes&&<p className="briefNotes">Note: {item.userNotes}</p>}<div className="briefLinks">{item.mapUrl&&<a href={item.mapUrl} target="_blank" rel="noreferrer">Route ↗</a>}{item.routeText&&<span>{item.routeText}</span>}</div></div></article>;})}</div></section>
+  {hoursIssues.length>0&&<section className="briefAlerts"><strong>{hoursIssues.length} hours notice{hoursIssues.length===1?'':'s'}</strong>{hoursIssues.map((check,index)=><p key={`${check.place.id}-${index}`}>{check.place.name}: {check.message}</p>)}</section>}
+  <div className="briefSuggestionGrid">{placeList('Food options nearby',foodIdeas)}{placeList('Flexible ideas nearby',activityIdeas)}</div>
+ </section></div>;
 }
 
 const publicSectionOptions:{id:PublicTripSection;label:string;detail:string}[]=[
