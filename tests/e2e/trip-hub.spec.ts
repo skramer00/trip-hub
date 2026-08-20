@@ -4,7 +4,10 @@ import type {TripState} from '../../lib/types';
 const publicState:TripState={
  settings:{version:2,title:'Toronto Test Trip',destinations:'Toronto',startDate:'2026-09-24',endDate:'2026-09-25',publicMessage:'Welcome to the test trip.',coverTheme:'forest',publicSections:['overview','today','explore','food']},
  days:[{date:'2026-09-24',label:'Thu 9/24',city:'Toronto',items:[{id:'arrival',time:'8:00 PM',title:'Arrive in Toronto',details:'Take UP Express downtown.',done:false}]}],
- places:[{id:'market',name:'St. Lawrence Market',region:'Toronto',category:'Attraction',notes:'Browse the market.',mapUrl:'https://maps.example/market',menuUrl:'',websiteUrl:'',tags:[],priority:'must',visited:false}],
+ places:[
+  {id:'market',name:'St. Lawrence Market',region:'Toronto',area:'Toronto — St. Lawrence / Distillery',category:'Attraction',notes:'Browse the market.',mapUrl:'https://maps.example/market',menuUrl:'',websiteUrl:'',tags:[],priority:'must',visited:false},
+  {id:'tower',name:'CN Tower',region:'Toronto',area:'Toronto — Downtown / Entertainment',category:'Attraction',notes:'City views.',mapUrl:'https://maps.example/tower',menuUrl:'',websiteUrl:'',tags:[],priority:'possible',visited:false}
+ ],
  foods:[{id:'tart',title:'Butter tart',category:'Try',done:false}],packing:[]
 };
 
@@ -17,6 +20,17 @@ test('public trip loads with useful navigation and no editor-only details',async
  await expect(page.getByText('CONFIRM-123')).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Trip',exact:true})).toBeVisible();
  await expect(page.locator('[data-nextjs-dialog]')).toHaveCount(0);
+});
+
+test('saved places are organized into neighborhood sections',async({page})=>{
+ await page.route('**/api/state',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:publicState,cloud:true,editor:false})}));
+ await page.goto('/');
+ await page.getByRole('button',{name:'Explore',exact:true}).click();
+ await page.getByRole('button',{name:'Saved Places',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Downtown / Entertainment'})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'St. Lawrence / Distillery'})).toBeVisible();
+ await expect(page.getByText('CN Tower',{exact:true})).toBeVisible();
+ await expect(page.getByText('St. Lawrence Market',{exact:true})).toBeVisible();
 });
 
 test('editor itinerary changes are sent to shared saving',async({page})=>{

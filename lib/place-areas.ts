@@ -95,3 +95,27 @@ export function suggestPlaceArea(place:Place){
 export function areaOptions(places:Place[]){
  return [...new Set([...suggestedAreaNames,...places.map(place=>place.area).filter((area):area is string=>Boolean(area))])].sort();
 }
+
+export function areaLabel(area:string){
+ return area.split(' — ').at(-1)??area;
+}
+
+export type PlaceAreaGroup={area:string;label:string;places:Place[]};
+
+export function groupPlacesByArea(places:Place[]):PlaceAreaGroup[]{
+ const groups=new Map<string,Place[]>();
+ for(const place of places){
+  const area=place.area??suggestPlaceArea(place)??'Unassigned';
+  const group=groups.get(area)??[];
+  group.push(place);
+  groups.set(area,group);
+ }
+ return [...groups.entries()]
+  .map(([area,group])=>({area,label:areaLabel(area),places:[...group].sort((a,b)=>a.name.localeCompare(b.name))}))
+  .sort((a,b)=>{
+   if(a.area==='Unassigned')return 1;
+   if(b.area==='Unassigned')return -1;
+   const regionCompare=(a.places[0]?.region??'').localeCompare(b.places[0]?.region??'');
+   return regionCompare||a.label.localeCompare(b.label);
+  });
+}
