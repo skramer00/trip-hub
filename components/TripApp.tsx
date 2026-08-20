@@ -25,6 +25,7 @@ import {calendarEntryDetails,entryCalendar,fixedCalendarEntries,googleCalendarUr
 import {validateTripState} from '@/lib/trip-validation';
 import type {WeatherResponse} from '@/lib/weather';
 import DietaryReview from '@/components/DietaryReview';
+import {lastSyncKey,localStateKey,markCloudSynced,pendingSyncKey,pushCloudState,readLocalState,stageDeviceState} from '@/lib/client-state';
 
 const tabs=['Overview','Today','Assistant','Journal','Nearby','Board','Itinerary','Locations','Reservations','Settings','Food','Dietary','Places','Hours','Checklist'] as const;
 type Tab=(typeof tabs)[number];
@@ -48,27 +49,10 @@ type AssistantPreview={date:string;time:string;area:string};
 
 type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'userNotes'|'optional'|'skipped'|'fixed'|'type'|'estimatedDuration'|'travelMinutes'|'prepBuffer'|'placeId'|'locationNotNeeded';
 type EditableValue=string|boolean|number|undefined;
-const localStateKey='trip-state';
-const pendingSyncKey='trip-state-pending-sync';
 const offlineReadyKey='trip-offline-ready-v2';
 const boardHiddenDaysKey='trip-board-hidden-days-v1';
 const editorSessionKey='trip-editor-session-v1';
-const lastSyncKey='trip-last-synced-at-v1';
 const restoreRollbackKey='trip-before-restore-v1';
-
-function readLocalState(){
- try{
-  const value=localStorage.getItem(localStateKey);
-  return value?JSON.parse(value) as TripState:null;
- }catch{return null;}
-}
-
-async function pushCloudState(next:TripState){
- const response=await fetch('/api/state',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(next)});
- const result=await response.json().catch(()=>({})) as {cloud?:boolean;error?:string};
- if(!response.ok||!result.cloud)throw new Error(result.error??'Shared saving is temporarily unavailable.');
- return true;
-}
 
 function activeDayIndex(days:TripState['days']){
  const today=new Date();
@@ -172,7 +156,7 @@ export default function TripApp(){
    const result=await response.json();
    if(!active)return;
    const editor=Boolean(result.editor);
-   const local=editor?readLocalState():null;
+   const local=editor?readLocalState(localStorage):null;
    const selected=editor&&hasPending&&local?local:result.state;
    setIsEditor(editor);
    if(editor)localStorage.setItem(editorSessionKey,'true');else localStorage.removeItem(editorSessionKey);
@@ -196,7 +180,7 @@ export default function TripApp(){
    }
   }).catch(()=>{
    if(!active)return;
-   const local=readLocalState();
+   const local=readLocalState(localStorage);
    if(localStorage.getItem(editorSessionKey)==='true'&&local){setState(local);setIsEditor(true);setPendingSync(hasPending);}
    setAuthReady(true);
   });
@@ -225,7 +209,7 @@ export default function TripApp(){
   const handleOnline=async()=>{
    setOnline(true);
    if(!isEditor)return;
-   const local=readLocalState();
+   const local=readLocalState(localStorage);
    if(localStorage.getItem(pendingSyncKey)==='true'&&local){
     try{
      const synced=await pushCloudState(local);
@@ -261,12 +245,11 @@ export default function TripApp(){
   void import('qrcode').then(({default:QRCode})=>QRCode.toDataURL(publicUrl,{width:360,margin:2,color:{dark:'#123f2d',light:'#ffffff'}})).then(value=>{if(active)setQrCode(value);}).catch(()=>{if(active)setQrCode('');});
  return()=>{active=false;};
  },[publicUrl,showSharePanel]);
- function recordSynced(){const value=new Date().toISOString();localStorage.setItem(lastSyncKey,value);setLastSyncedAt(value);}
+ function recordSynced(){setLastSyncedAt(markCloudSynced(localStorage));}
  async function persist(next:TripState){
   if(!isEditor)return;
   setState(next);
-  localStorage.setItem(localStateKey,JSON.stringify(next));
-  localStorage.setItem(pendingSyncKey,'true');
+  stageDeviceState(localStorage,next);
   setPendingSync(true);
   setSyncError('');
   if(!navigator.onLine)return;
@@ -389,7 +372,7 @@ export default function TripApp(){
  }
  function toggleDay(di:number,ii:number){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];item.done=!item.done;if(item.done){item.completedAt=new Date().toISOString();item.skipped=false;delete item.skippedAt;}else delete item.completedAt;void persist(next);}
  function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='fixed'||key==='locationNotNeeded')item[key]=Boolean(value);else if(key==='skipped'){item.skipped=Boolean(value);if(item.skipped)item.skippedAt??=new Date().toISOString();else delete item.skippedAt;}else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
- function saveEdits(di?:number){const latest=readLocalState()??state;if(!latest)return;const next=structuredClone(latest);if(di!==undefined)next.days[di].items=sortItems(next.days[di].items);void persist(next);}
+ function saveEdits(di?:number){const latest=readLocalState(localStorage)??state;if(!latest)return;const next=structuredClone(latest);if(di!==undefined)next.days[di].items=sortItems(next.days[di].items);void persist(next);}
  function addItem(di:number){if(!state)return;const next=structuredClone(state);next.days[di].items.push({id:`custom-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:'12:00 PM',title:'New stop',details:'',destination:'',routeText:'',keyInfo:'',userNotes:'',done:false,optional:false,fixed:false,type:'activity',estimatedDuration:60,travelMinutes:20,prepBuffer:15});next.days[di].items=sortItems(next.days[di].items);void persist(next);}
  function addPlaceToItinerary(place:Place,di:number,optional=false){
   if(!state)return;
@@ -605,7 +588,7 @@ export default function TripApp(){
   setState(next);
   localStorage.setItem(localStateKey,JSON.stringify(next));
  }
- function savePlaceChanges(){const latest=readLocalState()??state;if(latest)void persist(structuredClone(latest));}
+ function savePlaceChanges(){const latest=readLocalState(localStorage)??state;if(latest)void persist(structuredClone(latest));}
  function saveNearbyPreset(preset:NearbyPreset){
   if(!state)return;
   const next=structuredClone(state);

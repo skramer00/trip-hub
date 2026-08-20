@@ -1,0 +1,41 @@
+import {expect,test} from '@playwright/test';
+import type {TripState} from '../../lib/types';
+
+const publicState:TripState={
+ settings:{version:2,title:'Toronto Test Trip',destinations:'Toronto',startDate:'2026-09-24',endDate:'2026-09-25',publicMessage:'Welcome to the test trip.',coverTheme:'forest',publicSections:['overview','today','explore','food']},
+ days:[{date:'2026-09-24',label:'Thu 9/24',city:'Toronto',items:[{id:'arrival',time:'8:00 PM',title:'Arrive in Toronto',details:'Take UP Express downtown.',done:false}]}],
+ places:[{id:'market',name:'St. Lawrence Market',region:'Toronto',category:'Attraction',notes:'Browse the market.',mapUrl:'https://maps.example/market',menuUrl:'',websiteUrl:'',tags:[],priority:'must',visited:false}],
+ foods:[{id:'tart',title:'Butter tart',category:'Try',done:false}],packing:[]
+};
+
+test('public trip loads with useful navigation and no editor-only details',async({page})=>{
+ await page.route('**/api/state',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:publicState,cloud:true,editor:false})}));
+ await page.goto('/');
+ await expect(page.getByRole('heading',{name:'Toronto Test Trip'})).toBeVisible();
+ await expect(page.getByRole('navigation',{name:'Trip sections'})).toBeVisible();
+ await expect(page.getByText('Welcome to the test trip.')).toBeVisible();
+ await expect(page.getByText('CONFIRM-123')).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Trip',exact:true})).toBeVisible();
+ await expect(page.locator('[data-nextjs-dialog]')).toHaveCount(0);
+});
+
+test('editor itinerary changes are sent to shared saving',async({page})=>{
+ const editorState:TripState={...publicState,days:[{...publicState.days[0],items:[{...publicState.days[0].items[0],keyInfo:'Private confirmation'}]}]};
+ let saved:TripState|undefined;
+ await page.route('**/api/state',async route=>{
+  if(route.request().method()==='PUT'){
+   saved=route.request().postDataJSON() as TripState;
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({ok:true,cloud:true})});
+   return;
+  }
+  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:editorState,cloud:true,editor:true})});
+ });
+ await page.goto('/');
+ await page.getByRole('button',{name:'Plan',exact:true}).click();
+ await page.getByRole('button',{name:'Edit Itinerary',exact:true}).click();
+ await page.getByRole('button',{name:'Edit',exact:true}).first().click();
+ await page.getByRole('textbox',{name:'Notes'}).fill('Meet by the main entrance');
+ await page.getByRole('button',{name:'Save changes'}).click();
+ await expect.poll(()=>saved?.days[0].items[0].userNotes).toBe('Meet by the main entrance');
+ await expect(page.getByText('Saved',{exact:true})).toBeVisible();
+});
