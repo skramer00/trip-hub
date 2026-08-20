@@ -53,3 +53,14 @@ test('editor itinerary changes are sent to shared saving',async({page})=>{
  await expect.poll(()=>saved?.days[0].items[0].userNotes).toBe('Meet by the main entrance');
  await expect(page.getByText('Saved',{exact:true})).toBeVisible();
 });
+
+test('readiness queue opens the exact itinerary item to fix',async({page})=>{
+ const editorState:TripState={...publicState,places:publicState.places.map(place=>({...place,ignoreHours:true})),days:[{...publicState.days[0],items:[{...publicState.days[0].items[0],fixed:true,placeId:'market',keyInfo:'Ticket saved'}]}]};
+ await page.route('**/api/state',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:editorState,cloud:true,editor:true})}));
+ await page.goto('/');
+ const action=page.locator('.readinessAction').filter({hasText:'Arrive in Toronto'});
+ await expect(action).toContainText('travel time');
+ await action.getByRole('button',{name:'Fix this'}).click();
+ await expect(page.getByRole('heading',{name:'Edit the trip without touching code'})).toBeVisible();
+ await expect(page.locator('#itinerary-arrival')).toBeVisible();
+});
