@@ -25,7 +25,9 @@ import {calendarEntryDetails,entryCalendar,fixedCalendarEntries,googleCalendarUr
 import {validateTripState} from '@/lib/trip-validation';
 import type {WeatherResponse} from '@/lib/weather';
 import DietaryReview from '@/components/DietaryReview';
+import TripChecklist from '@/components/TripChecklist';
 import {lastSyncKey,localStateKey,markCloudSynced,pendingSyncKey,pushCloudState,readLocalState,stageDeviceState} from '@/lib/client-state';
+import {formatPrepDueDate,nextPrepTask,prepDueStatus,prepTasks} from '@/lib/trip-prep';
 
 const tabs=['Overview','Today','Assistant','Journal','Nearby','Board','Itinerary','Locations','Reservations','Settings','Food','Dietary','Places','Hours','Checklist'] as const;
 type Tab=(typeof tabs)[number];
@@ -468,7 +470,29 @@ export default function TripApp(){
   setBoardUndo(structuredClone(state));
   void persist(previous);
  }
- function toggleList(key:'foods'|'packing',index:number){if(!state)return;const next=structuredClone(state);next[key][index].done=!next[key][index].done;if(key==='foods'){const food=next.foods[index];if(food.done)food.triedAt=new Date().toISOString();else{delete food.triedAt;delete food.triedAtPlaceId;}}void persist(next);}
+ function toggleFood(index:number){if(!state)return;const next=structuredClone(state);const food=next.foods[index];food.done=!food.done;if(food.done)food.triedAt=new Date().toISOString();else{delete food.triedAt;delete food.triedAtPlaceId;}void persist(next);}
+ function toggleChecklistItem(id:string){
+  if(!state)return;
+  const next=structuredClone(state);
+  const item=next.packing.find(candidate=>candidate.id===id);
+  if(!item)return;
+  item.done=!item.done;
+  if(item.done)item.completedAt=new Date().toISOString();else delete item.completedAt;
+  void persist(next);
+ }
+ function updateChecklistItem(id:string,changes:Partial<CheckItem>,saveNow=false){
+  if(!state)return;
+  const next=structuredClone(state);
+  const item=next.packing.find(candidate=>candidate.id===id);
+  if(!item)return;
+  Object.assign(item,changes);
+  setState(next);
+  localStorage.setItem(localStateKey,JSON.stringify(next));
+  if(saveNow)void persist(next);
+ }
+ function addChecklistItem(item:CheckItem){if(!state)return;const next=structuredClone(state);next.packing.push(item);void persist(next);}
+ function addSuggestedChecklistItems(items:CheckItem[]){if(!state||!items.length)return;const next=structuredClone(state);next.packing.push(...items);void persist(next);}
+ function deleteChecklistItem(id:string){if(!state)return;const next=structuredClone(state);next.packing=next.packing.filter(item=>item.id!==id);void persist(next);}
  function markFoodTried(foodId:string,placeId?:string,done=true){
   if(!state)return;
   const next=structuredClone(state);
@@ -599,6 +623,39 @@ export default function TripApp(){
   setTab(action.target);
   const anchorId=action.anchorId;
   if(anchorId)window.setTimeout(()=>document.getElementById(anchorId)?.scrollIntoView({behavior:'smooth',block:'center'}),100);
+ }
+ function ignoreReadinessAction(actionId:string){
+  if(!state)return;
+  const next=structuredClone(state);
+  next.readinessIgnoredActionIds=[...new Set([...(next.readinessIgnoredActionIds??[]),actionId])];
+  void persist(next);
+ }
+ function restoreReadinessAction(actionId:string){
+  if(!state)return;
+  const next=structuredClone(state);
+  next.readinessIgnoredActionIds=(next.readinessIgnoredActionIds??[]).filter(id=>id!==actionId);
+  void persist(next);
+ }
+ function applyReadinessQuickFix(action:ReadinessAction){
+  if(!state||!action.quickFix)return;
+  const quickFix=action.quickFix;
+  const next=structuredClone(state);
+  if(quickFix.kind==='ignore-hours'){
+   const place=next.places.find(candidate=>candidate.id===quickFix.placeId);
+   if(!place)return;
+   place.ignoreHours=true;
+  }else{
+   const day=next.days.find(candidate=>candidate.date===quickFix.dayDate);
+   const item=day?.items.find(candidate=>candidate.id===quickFix.itemId);
+   const place=next.places.find(candidate=>candidate.id===quickFix.placeId);
+   if(!item||!place)return;
+   item.locationNotNeeded=false;
+   item.placeId=place.id;
+   item.destination=place.formattedAddress||place.name;
+   item.mapUrl=mapsUrl(item.destination);
+  }
+  next.readinessIgnoredActionIds=(next.readinessIgnoredActionIds??[]).filter(id=>id!==action.id);
+  void persist(next);
  }
  function editPlaceHours(id:string,day:Weekday,changes:{open?:string;close?:string;closed?:boolean}){
   if(!state)return;
@@ -787,12 +844,12 @@ export default function TripApp(){
    {!editorView&&tripSettings.publicMessage&&<section className="card publicWelcome"><div className="eyebrow">WELCOME TO OUR TRIP</div><p>{tripSettings.publicMessage}</p></section>}
    <nav className="tabs mainTabs" aria-label="Trip sections">{visibleNavGroups.map(group=><button key={group.label} className={activeNavGroup.label===group.label?'active':''} onClick={()=>setTab(group.tabs[0])}>{group.label}</button>)}</nav>
    {activeNavGroup.tabs.length>1&&<nav className="subTabs" aria-label={`${activeNavGroup.label} views`}>{activeNavGroup.tabs.map(item=><button key={item} className={tab===item?'active':''} onClick={()=>setTab(item)}>{tabLabels[item]??item}</button>)}</nav>}
-   {tab==='Overview'&&<TripOverview state={state} settings={tripSettings} canEdit={editorView} onToday={()=>setTab('Today')} onBrief={index=>{setBriefDayIndex(index);setShowDailyBrief(true);}} onEditDay={()=>setTab('Itinerary')}/>}
+   {tab==='Overview'&&<TripOverview state={state} settings={tripSettings} canEdit={editorView} onToday={()=>setTab('Today')} onBrief={index=>{setBriefDayIndex(index);setShowDailyBrief(true);}} onEditDay={()=>setTab('Itinerary')} onChecklist={()=>setTab('Checklist')}/>}
    {tab==='Today'&&currentDay&&<section>
    <div className="todayHero card"><div><div className="eyebrow">TODAY</div><h2>{currentDay.label} · {currentDay.city}</h2><p className="muted">Recommendations below are selected for this specific itinerary day.</p>{editorView&&<button className="btn dailyBriefOpen" onClick={()=>{setBriefDayIndex(currentDayIndex);setShowDailyBrief(true);}}>Open daily brief</button>}</div><div className="progressRing" aria-label={`${completedToday} of ${totalToday} complete`}><strong>{completedToday}/{totalToday}</strong><span>done</span></div></div>
     {editorView&&<MealBalanceCard date={currentDay.date} value={state.mealBalanceByDate?.[currentDay.date]} triedFoods={foodsTriedOnDate(state,currentDay.date)} onChange={updateMealBalance}/>}
     {editorView&&<QuickCapture date={currentDay.date} places={state.places} foods={state.foods} onSave={saveJournalMoment} onDelete={deleteJournalMoment}/>}
-    {editorView&&readiness&&<TripReadinessDashboard readiness={readiness} onOpen={openReadinessAction}/>}
+    {editorView&&readiness&&<TripReadinessDashboard readiness={readiness} onOpen={openReadinessAction} onQuickFix={applyReadinessQuickFix} onIgnore={ignoreReadinessAction} onRestore={restoreReadinessAction}/>}
     {nextStep?<div className="card nextStepCard" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><div className="between" style={{alignItems:'flex-start',gap:'16px',marginTop:'6px'}}><div><h2 style={{marginBottom:'4px'}}>{nextStep.title}</h2><div className="muted">{nextStep.time}</div>{nextStep.details&&<p>{nextStep.details}</p>}{nextStep.routeText&&<p className="muted small">🚌 {nextStep.routeText}</p>}{(nextStep.keyInfo||nextStep.confirmationNumber)&&<div style={{marginTop:'12px'}}><strong>Key Info</strong><p style={{whiteSpace:'pre-wrap',marginTop:'4px'}}>{nextStep.keyInfo??nextStep.confirmationNumber}</p></div>}</div><span className="chip">{nextStepIndex+1} of {currentDay.items.length}</span></div><div className="placeActions" style={{marginTop:'14px'}}>{nextStep.mapUrl&&<a className="btn primary" href={nextStep.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}<button className="btn" onClick={()=>toggleDay(currentDayIndex,nextStepIndex)}>Mark complete</button></div></div>:<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><h2 style={{marginTop:'6px'}}>You’re done for today</h2><p className="muted">Every itinerary item for this day is complete.</p></div>}
     <div className="statGrid"><div className="stat"><span>Trip progress</span><strong>{completedTrip}/{tripProgress.length}</strong></div><div className="stat"><span>Saved places</span><strong>{state.places.length}</strong></div><div className="stat"><span>Foods remaining</span><strong>{state.foods.filter(i=>!i.done).length}</strong></div></div>
     <h2 className="sectionTitle">Today’s plan</h2>
@@ -838,7 +895,7 @@ export default function TripApp(){
     onRestore={restoreTrip} onPrint={()=>{setTab('Overview');window.setTimeout(()=>window.print(),200);}}
     onShare={()=>{setShareMessage('');setShowSharePanel(true);}} onPreview={enterPublicPreview}
    />}
-   {tab==='Food'&&<section><div className="pageIntro"><div><div className="eyebrow">LOCAL FLAVORS</div><h2>Eat the trip</h2></div><span className="chip">{state.foods.filter(i=>i.done).length}/{state.foods.length} tried</span></div>{editorView&&<><div className="card tripDietPanel"><div><strong>Food preferences for this trip</strong><p className="muted small">These gently improve recommendations; they do not hide foods or judge what you choose.</p></div><div className="dietChoiceRow">{dietaryPreferences.map(preference=><label className={`dietChoice ${state.dietaryPreferences?.includes(preference.id)?'selected':''}`} key={preference.id}><input type="checkbox" checked={state.dietaryPreferences?.includes(preference.id)??false} onChange={()=>toggleTripDiet(preference.id)}/>{preference.label}{!preference.active&&<small>ready for later</small>}</label>)}</div></div><FoodConnectionsPanel foods={state.foods} places={state.places} onConnection={updateFoodPlaceConnection} onOpenPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></>}{['Try','Bring home'].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.foods.map((food,index)=>food.category===group&&<label className={`card checkCard ${food.done?'done':''}`} key={food.id}><input type="checkbox" checked={food.done} onChange={()=>toggleList('foods',index)}/><div><h3>{food.title}</h3>{food.notes&&<p className="muted small">{food.notes}</p>}{food.triedAt&&<p className="foodTriedMeta">Tried{food.triedAtPlaceId?` at ${state.places.find(place=>place.id===food.triedAtPlaceId)?.name??'a saved place'}`:''} · {new Date(food.triedAt).toLocaleDateString()}</p>}</div></label>)}</div></div>)}</section>}
+   {tab==='Food'&&<section><div className="pageIntro"><div><div className="eyebrow">LOCAL FLAVORS</div><h2>Eat the trip</h2></div><span className="chip">{state.foods.filter(i=>i.done).length}/{state.foods.length} tried</span></div>{editorView&&<><div className="card tripDietPanel"><div><strong>Food preferences for this trip</strong><p className="muted small">These gently improve recommendations; they do not hide foods or judge what you choose.</p></div><div className="dietChoiceRow">{dietaryPreferences.map(preference=><label className={`dietChoice ${state.dietaryPreferences?.includes(preference.id)?'selected':''}`} key={preference.id}><input type="checkbox" checked={state.dietaryPreferences?.includes(preference.id)??false} onChange={()=>toggleTripDiet(preference.id)}/>{preference.label}{!preference.active&&<small>ready for later</small>}</label>)}</div></div><FoodConnectionsPanel foods={state.foods} places={state.places} onConnection={updateFoodPlaceConnection} onOpenPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></>}{['Try','Bring home'].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.foods.map((food,index)=>food.category===group&&<label className={`card checkCard ${food.done?'done':''}`} key={food.id}><input type="checkbox" checked={food.done} onChange={()=>toggleFood(index)}/><div><h3>{food.title}</h3>{food.notes&&<p className="muted small">{food.notes}</p>}{food.triedAt&&<p className="foodTriedMeta">Tried{food.triedAtPlaceId?` at ${state.places.find(place=>place.id===food.triedAtPlaceId)?.name??'a saved place'}`:''} · {new Date(food.triedAt).toLocaleDateString()}</p>}</div></label>)}</div></div>)}</section>}
    {tab==='Dietary'&&<DietaryReview places={state.places} onEdit={editPlace} onBulkEdit={editPlaces} onSave={savePlaceChanges}/>}
    {tab==='Places'&&<section>
     <div className="pageIntro"><div><div className="eyebrow">SAVED SPOTS</div><h2>{editorView?'Find and manage places':'Explore saved places'}</h2><p className="muted">{editorView?'Organize saved spots by region, neighborhood, and practical dietary fit.':'Browse restaurants, neighborhoods, museums, and other trip ideas.'}</p></div><div className="placeActions"><span className="chip">{filtered.length} shown</span>{editorView&&unassignedAreaCount>0&&<button className="btn" onClick={()=>setArea('Unassigned')}>{unassignedAreaCount} unassigned</button>}{editorView&&suggestibleAreaCount>0&&<button className="btn" onClick={assignSuggestedAreas}>Suggest {suggestibleAreaCount} areas</button>}{editorView&&<button className="btn primary" onClick={addPlace}>+ Add place</button>}</div></div>
@@ -855,7 +912,7 @@ export default function TripApp(){
     setPriority('All');
     setTab('Places');
    }}/>}
-   {tab==='Checklist'&&<section><div className="pageIntro"><div><div className="eyebrow">PACK SMART</div><h2>Nothing important left behind</h2></div><span className="chip">{state.packing.filter(i=>i.done).length}/{state.packing.length} packed</span></div>{[...new Set(state.packing.map(i=>i.category))].map(group=><div key={group} className="listGroup"><h2 className="sectionTitle">{group}</h2><div className="grid">{state.packing.map((item,index)=>item.category===group&&<label className={`card checkCard ${item.done?'done':''}`} key={item.id}><input type="checkbox" checked={item.done} onChange={()=>toggleList('packing',index)}/><div>{item.title}</div></label>)}</div></div>)}</section>}
+   {tab==='Checklist'&&<TripChecklist items={state.packing} startDate={tripSettings.startDate} onToggle={toggleChecklistItem} onUpdate={updateChecklistItem} onAdd={addChecklistItem} onDelete={deleteChecklistItem} onAddSuggested={addSuggestedChecklistItems}/>}
   </main>
   {editorView&&showDailyBrief&&<DailyBrief state={state} initialDayIndex={briefDayIndex} onClose={()=>setShowDailyBrief(false)} onOffline={downloadOffline}/>}
   {showSharePanel&&<div className="editorUnlockBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setShowSharePanel(false);}}><section className="card shareAccessPanel" role="dialog" aria-modal="true" aria-labelledby="share-access-title"><button className="editorUnlockClose" aria-label="Close share and access" onClick={()=>setShowSharePanel(false)}>×</button><div className="eyebrow">SHARE & ACCESS</div><div className="shareAccessHeading"><div><h2 id="share-access-title">Invite people into the trip</h2><p className="muted">Visitors can browse the public itinerary, places, food list, and recap without seeing private planning details.</p></div><span className={`accessModeBadge ${editorView?'editing':'public'}`}>{editorView?'Editing unlocked':'Public view'}</span></div><div className="shareAccessGrid"><div className="shareLinkCard"><strong>Public trip link</strong><div className="shareUrl"><span>{publicUrl||'Loading link…'}</span><button className="btn primary" onClick={copyPublicLink} disabled={!publicUrl}>Copy</button></div><div className="shareButtons"><button className="btn" onClick={sharePublicLink} disabled={!publicUrl}>Share from this device</button>{isEditor&&<button className="btn" onClick={enterPublicPreview}>Preview public view</button>}</div>{shareMessage&&<p className="shareMessage" role="status">{shareMessage}</p>}</div><div className="qrCard"><div className="qrFrame">{qrCode?<Image src={qrCode} alt="QR code for the public Trip Hub link" width={180} height={180} unoptimized/>:<span>Preparing QR code…</span>}</div><small>Scan to open the public trip</small></div></div><div className="privacySummary"><div><span className="privacyIcon public">✓</span><div><strong>Visitors can see</strong><p>Public itinerary, saved places, food ideas, nearby suggestions, and the trip recap.</p></div></div><div><span className="privacyIcon private">⌁</span><div><strong>Stays private</strong><p>Confirmation numbers, Key Info, personal notes, packing lists, dietary guidance, and editing tools.</p></div></div></div>{isEditor?<div className="shareAccessFooter"><div><strong>Editor session is active</strong><span>{publicPreview?'You are previewing the public experience.':'Your private editing tools are currently available on this device.'}</span></div><button className="btn dangerButton" onClick={lockEditor}>Lock editing now</button></div>:<div className="shareAccessFooter"><div><strong>Viewing publicly</strong><span>Use the shared PIN if you need to make changes.</span></div><button className="btn" onClick={()=>{setShowSharePanel(false);setAuthError('');setShowEditorUnlock(true);}}>Editor access</button></div>}</section></div>}
@@ -863,10 +920,13 @@ export default function TripApp(){
  </>;
 }
 
-function TripOverview({state,settings,canEdit,onToday,onBrief,onEditDay}:{state:TripState;settings:TripSettings;canEdit:boolean;onToday:()=>void;onBrief:(dayIndex:number)=>void;onEditDay:(date:string)=>void}){
+function TripOverview({state,settings,canEdit,onToday,onBrief,onEditDay,onChecklist}:{state:TripState;settings:TripSettings;canEdit:boolean;onToday:()=>void;onBrief:(dayIndex:number)=>void;onEditDay:(date:string)=>void;onChecklist:()=>void}){
  const fixedPlans=state.days.reduce((total,day)=>total+day.items.filter(isFixedItem).length,0);
+ const nextTask=nextPrepTask(state);
+ const preparation=prepTasks(state);
  return <section className="overviewPage"><div className="pageIntro overviewIntro"><div><div className="eyebrow">TRIP OVERVIEW</div><h2>The whole journey at a glance</h2><p className="muted">Browse each day, open routes, and expand only the details you need.</p></div><button className="btn primary" onClick={onToday}>Open today’s plan</button></div>
   <div className="overviewStats"><div><strong>{state.days.length}</strong><span>trip days</span></div><div><strong>{fixedPlans}</strong><span>timed anchors</span></div><div><strong>{state.places.length}</strong><span>saved places</span></div></div>
+  {canEdit&&<div className={`card overviewPrep ${nextTask?`due-${prepDueStatus(nextTask)}`:'complete'}`}><div className="overviewPrepIcon" aria-hidden="true">{nextTask?'→':'★'}</div><div>{nextTask?<><div className="eyebrow">NEXT BEFORE-YOU-GO TASK</div><h3>{nextTask.title}</h3><p>{formatPrepDueDate(nextTask)} · {nextTask.category}</p></>:<><div className="eyebrow">BEFORE YOU GO</div><h3>{preparation.length?'Preparation list complete':'Set up your trip-preparation list'}</h3><p>{preparation.length?'Every preparation task is checked off.':'Add due-dated reminders without mixing them into packing.'}</p></>}</div><button className="btn" onClick={onChecklist}>{nextTask?'Open checklist':preparation.length?'Review list':'Set up tasks'}</button></div>}
   <div className="overviewTimeline">{state.days.map((day,index)=><details className="card overviewDay" key={day.date}><summary><span className="overviewMarker" aria-hidden="true">{index+1}</span><span className="overviewDayTitle"><small>{day.date}</small><strong>{day.label} · {day.city}</strong><em>{day.items.length} plan{day.items.length===1?'':'s'} · {day.items.filter(isFixedItem).length} timed</em></span><span className="overviewChevron" aria-hidden="true">⌄</span></summary><div className="overviewDayBody">{day.items.length?<ol>{day.items.map(item=><li key={item.id}><span className="overviewTime">{item.time}</span><div><div className="overviewItemTitle"><strong>{item.title}</strong>{isFixedItem(item)&&<span className="chip">Timed</span>}{item.optional&&<span className="chip neutral">Optional</span>}</div>{item.details&&<p>{item.details}</p>}{item.mapUrl&&<a className="textLink" href={item.mapUrl} target="_blank" rel="noreferrer">Open route ↗</a>}</div></li>)}</ol>:<p className="muted">This day is open for exploring.</p>}{canEdit&&<div className="overviewDayActions"><button className="btn primary" onClick={()=>onBrief(index)}>Open daily brief</button><button className="btn overviewEdit" onClick={()=>onEditDay(day.date)}>Edit this day</button></div>}</div></details>)}</div>
   <div className="card overviewFooter"><div><strong>{settings.destinations}</strong><p className="muted small">{tripDateLabel(settings.startDate,settings.endDate)}</p></div><button className="textButton" onClick={onToday}>Go to the live day view →</button></div>
  </section>;
@@ -974,12 +1034,14 @@ function TripSettingsView({state,settings,publicUrl,canUndoRestore,onUndoRestore
  </section>;
 }
 
-function TripReadinessDashboard({readiness,onOpen}:{readiness:ReturnType<typeof buildTripReadiness>;onOpen:(action:ReadinessAction|{target:ReadinessTarget;anchorId?:string})=>void}){
+function TripReadinessDashboard({readiness,onOpen,onQuickFix,onIgnore,onRestore}:{readiness:ReturnType<typeof buildTripReadiness>;onOpen:(action:ReadinessAction|{target:ReadinessTarget;anchorId?:string})=>void;onQuickFix:(action:ReadinessAction)=>void;onIgnore:(actionId:string)=>void;onRestore:(actionId:string)=>void}){
  const priorityActions=readiness.actions.slice(0,6);
+ const firstAction=readiness.actions[0];
  return <section className="card readinessDashboard" aria-labelledby="trip-readiness-title">
-  <div className="readinessHeader"><div><div className="eyebrow">TRIP READINESS</div><h2 id="trip-readiness-title">{readiness.readyCount} of {readiness.checks.length} planning areas ready</h2><p className="muted small">A calm overview of details worth checking before departure.</p></div><div className="readinessFixed"><strong>{readiness.keyInfoComplete}/{readiness.fixedPlanCount}</strong><span>fixed plans with Key Info</span></div></div>
+  <div className="readinessHeader"><div><div className="eyebrow">TRIP READINESS</div><h2 id="trip-readiness-title">{readiness.readyCount===readiness.checks.length?'Ready for travel':`${readiness.readyCount} of ${readiness.checks.length} planning areas ready`}</h2><p className="muted small">A calm overview of details worth checking before departure.</p></div><div className="readinessHeaderActions"><div className="readinessFixed"><strong>{readiness.keyInfoComplete}/{readiness.fixedPlanCount}</strong><span>fixed plans with Key Info</span></div>{firstAction&&<button className="btn primary readinessNext" onClick={()=>onOpen(firstAction)}>Fix next →</button>}</div></div>
   <div className="readinessGrid">{readiness.checks.map(check=><button className={`readinessCard status-${check.status}`} onClick={()=>onOpen({target:check.target})} key={check.id}><span className="readinessIcon" aria-hidden="true">{check.status==='ready'?'✓':check.status==='attention'?'!':'•'}</span><span className="readinessCopy"><strong>{check.label}</strong><b>{check.value}</b><small>{check.detail}</small></span><span className="readinessArrow" aria-hidden="true">→</span></button>)}</div>
-  {priorityActions.length>0?<div className="readinessQueue"><div className="between"><div><div className="eyebrow">NEXT DETAILS TO FIX</div><h3>{readiness.actions.length} actionable planning note{readiness.actions.length===1?'':'s'}</h3></div><span className="chip neutral">Showing {priorityActions.length}</span></div><div className="readinessActionList">{priorityActions.map(action=><article className={`readinessAction status-${action.status}`} key={action.id}><span className="readinessActionDot" aria-hidden="true"/><div><strong>{action.label}</strong><p>{action.detail}</p></div><button className="btn" onClick={()=>onOpen(action)}>Fix this</button></article>)}</div></div>:<div className="readinessComplete"><span aria-hidden="true">✓</span><div><strong>Trip details are in good shape</strong><p>No readiness cleanup items are waiting.</p></div></div>}
+  {priorityActions.length>0?<div className="readinessQueue"><div className="between"><div><div className="eyebrow">GUIDED CLEANUP</div><h3>{readiness.actions.length} planning note{readiness.actions.length===1?'':'s'} left</h3></div><span className="chip neutral">Showing {priorityActions.length}</span></div><div className="readinessActionList">{priorityActions.map((action,index)=><article className={`readinessAction status-${action.status}`} key={action.id}><span className="readinessActionDot" aria-hidden="true"/><div><strong>{index===0?'Next: ':''}{action.label}</strong><p>{action.detail}</p></div><div className="readinessActionButtons">{action.quickFix&&<button className="btn primary" onClick={()=>onQuickFix(action)}>{action.quickFix.label}</button>}<button className="btn" onClick={()=>onOpen(action)}>Review</button><button className="textButton" onClick={()=>onIgnore(action.id)}>Not needed</button></div></article>)}</div></div>:<div className="readinessComplete"><span aria-hidden="true">✓</span><div><strong>Trip details are in good shape</strong><p>No readiness cleanup items are waiting.</p></div></div>}
+  {readiness.ignoredActions.length>0&&<details className="readinessIgnored"><summary>{readiness.ignoredActions.length} intentionally dismissed item{readiness.ignoredActions.length===1?'':'s'}</summary><div>{readiness.ignoredActions.map(action=><div className="readinessIgnoredRow" key={action.id}><span><strong>{action.label}</strong><small>{action.detail}</small></span><button className="textButton" onClick={()=>onRestore(action.id)}>Restore</button></div>)}</div></details>}
  </section>;
 }
 

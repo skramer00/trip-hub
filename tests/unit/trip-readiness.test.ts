@@ -25,4 +25,21 @@ describe('trip readiness actions',()=>{
   expect(fixedAction?.detail).toContain('travel time');
   expect(fixedAction?.detail).toContain('route');
  });
+
+ it('treats intentionally dismissed actions as resolved and keeps them restorable',()=>{
+  const ignored={...state,readinessIgnoredActionIds:['hours-tower','fixed-fixed']};
+  const readiness=buildTripReadiness(ignored);
+  expect(readiness.actions.map(action=>action.id)).not.toContain('hours-tower');
+  expect(readiness.actions.map(action=>action.id)).not.toContain('fixed-fixed');
+  expect(readiness.ignoredActions.map(action=>action.id)).toEqual(expect.arrayContaining(['hours-tower','fixed-fixed']));
+  expect(readiness.checks.find(check=>check.id==='hours')?.status).toBe('ready');
+  expect(readiness.checks.find(check=>check.id==='keyInfo')?.status).toBe('ready');
+ });
+
+ it('offers safe quick fixes for inferred locations and irrelevant hours',()=>{
+  const autoState:TripState={...state,days:[{...state.days[0],items:[{...state.days[0].items[0],placeId:undefined,title:'CN Tower'}]}]};
+  const readiness=buildTripReadiness(autoState);
+  expect(readiness.actions.find(action=>action.id==='location-fixed')?.quickFix).toMatchObject({kind:'confirm-location',placeId:'tower'});
+  expect(readiness.actions.find(action=>action.id==='hours-tower')?.quickFix).toMatchObject({kind:'ignore-hours',placeId:'tower'});
+ });
 });

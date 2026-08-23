@@ -60,7 +60,50 @@ test('readiness queue opens the exact itinerary item to fix',async({page})=>{
  await page.goto('/');
  const action=page.locator('.readinessAction').filter({hasText:'Arrive in Toronto'});
  await expect(action).toContainText('travel time');
- await action.getByRole('button',{name:'Fix this'}).click();
+ await action.getByRole('button',{name:'Review'}).click();
  await expect(page.getByRole('heading',{name:'Edit the trip without touching code'})).toBeVisible();
  await expect(page.locator('#itinerary-arrival')).toBeVisible();
+});
+
+test('readiness items can be dismissed and restored',async({page})=>{
+ const editorState:TripState={...publicState,places:publicState.places.map(place=>({...place,ignoreHours:true})),days:[{...publicState.days[0],items:[{...publicState.days[0].items[0],fixed:true,placeId:'market',keyInfo:'Ticket saved'}]}]};
+ let saved:TripState|undefined;
+ await page.route('**/api/state',async route=>{
+  if(route.request().method()==='PUT'){
+   saved=route.request().postDataJSON() as TripState;
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({ok:true,cloud:true})});
+   return;
+  }
+  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:editorState,cloud:true,editor:true})});
+ });
+ await page.goto('/');
+ const action=page.locator('.readinessAction').filter({hasText:'Arrive in Toronto'});
+ await action.getByRole('button',{name:'Not needed'}).click();
+ await expect.poll(()=>saved?.readinessIgnoredActionIds).toContain('fixed-arrival');
+ await page.getByText('1 intentionally dismissed item').click();
+ await page.getByRole('button',{name:'Restore'}).click();
+ await expect.poll(()=>saved?.readinessIgnoredActionIds).toEqual([]);
+ await expect(page.locator('.readinessAction').filter({hasText:'Arrive in Toronto'})).toBeVisible();
+});
+
+test('before-you-go suggestions save and surface the next preparation task',async({page})=>{
+ const editorState:TripState={...publicState,packing:[]};
+ let saved:TripState|undefined;
+ await page.route('**/api/state',async route=>{
+  if(route.request().method()==='PUT'){
+   saved=route.request().postDataJSON() as TripState;
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({ok:true,cloud:true})});
+   return;
+  }
+  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:editorState,cloud:true,editor:true})});
+ });
+ await page.goto('/');
+ await page.getByRole('button',{name:'Lists',exact:true}).click();
+ await page.getByRole('button',{name:'Checklist',exact:true}).click();
+ await page.getByRole('button',{name:'Add 5 suggestions'}).click();
+ await expect.poll(()=>saved?.packing.filter(item=>item.checklistType==='prep').length).toBe(5);
+ await page.getByRole('button',{name:'Trip',exact:true}).click();
+ await page.getByRole('button',{name:'Overview',exact:true}).click();
+ await expect(page.getByText('Confirm local and event transportation')).toBeVisible();
+ await expect(page.getByRole('button',{name:'Open checklist'})).toBeVisible();
 });

@@ -7,6 +7,7 @@ export function publicTripState(state:TripState):TripState{
   packing:[],
   dietaryPreferences:[],
   mealBalanceByDate:{},
+  readinessIgnoredActionIds:[],
   journalNotesByDate:{},
   journalMoments:(state.journalMoments??[]).map(({note:_,...moment})=>moment),
   places:state.places.map(place=>({...place,dietaryRatings:[]}))

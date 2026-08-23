@@ -1,7 +1,7 @@
 export type ItineraryItemType='reservation'|'activity'|'food'|'travel'|'hotel';
 export type ItineraryItem={id:string,time:string,title:string,details?:string,done:boolean,completedAt?:string,skipped?:boolean,skippedAt?:string,lastRescheduledAt?:string,rescheduledFromDate?:string,optional?:boolean,destination?:string,mapUrl?:string,routeText?:string,keyInfo?:string,confirmationNumber?:string,userNotes?:string,fixed?:boolean,type?:ItineraryItemType,estimatedDuration?:number,travelMinutes?:number,prepBuffer?:number,placeId?:string,locationNotNeeded?:boolean};
 export type TripDay={date:string,label:string,city:string,items:ItineraryItem[]};
-export type CheckItem={id:string,title:string,category:string,done:boolean,notes?:string,triedAtPlaceId?:string,triedAt?:string};
+export type CheckItem={id:string,title:string,category:string,done:boolean,notes?:string,triedAtPlaceId?:string,triedAt?:string,checklistType?:'prep'|'packing',dueDate?:string,completedAt?:string};
 export type Weekday='sunday'|'monday'|'tuesday'|'wednesday'|'thursday'|'friday'|'saturday';
 export type DietaryPreference='low-fodmap'|'gluten-free'|'vegetarian'|'vegan'|'dairy-free'|'pescatarian'|'nut-aware';
 export type DietaryFit='easy'|'workable'|'difficult'|'unknown'|'not-applicable';
@@ -18,4 +18,4 @@ export type GooglePlaceCandidate={googlePlaceId:string;name:string;formattedAddr
 export type PublicTripSection='overview'|'today'|'recap'|'explore'|'food';
 export type TripCoverTheme='forest'|'lake'|'sunset';
 export type TripSettings={version:number;title:string;destinations:string;startDate:string;endDate:string;publicMessage:string;coverTheme:TripCoverTheme;publicSections:PublicTripSection[]};
-export type TripState={days:TripDay[],foods:CheckItem[],packing:CheckItem[],places:Place[],settings?:TripSettings,dietaryPreferences?:DietaryPreference[],mealBalanceByDate?:Record<string,DailyMealBalance>,journalNotesByDate?:Record<string,string>,journalMoments?:JournalMoment[],nearbyPresets?:NearbyPreset[],defaultNearbyPresetId?:string};
+export type TripState={days:TripDay[],foods:CheckItem[],packing:CheckItem[],places:Place[],settings?:TripSettings,dietaryPreferences?:DietaryPreference[],mealBalanceByDate?:Record<string,DailyMealBalance>,journalNotesByDate?:Record<string,string>,journalMoments?:JournalMoment[],nearbyPresets?:NearbyPreset[],defaultNearbyPresetId?:string,readinessIgnoredActionIds?:string[]};
