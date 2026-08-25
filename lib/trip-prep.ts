@@ -17,8 +17,10 @@ function dateOffset(value:string,days:number){
 }
 
 export function isPrepTask(item:CheckItem){return item.checklistType==='prep';}
+export function isBucketItem(item:CheckItem){return item.checklistType==='bucket';}
 export function prepTasks(state:Pick<TripState,'packing'>){return state.packing.filter(isPrepTask);}
-export function packingItems(state:Pick<TripState,'packing'>){return state.packing.filter(item=>!isPrepTask(item));}
+export function packingItems(state:Pick<TripState,'packing'>){return state.packing.filter(item=>!isPrepTask(item)&&!isBucketItem(item));}
+export function bucketItems(state:Pick<TripState,'packing'>){return state.packing.filter(isBucketItem);}
 
 export function prepDueStatus(item:CheckItem,now=new Date()):PrepDueStatus{
  const due=parseDate(item.dueDate);
