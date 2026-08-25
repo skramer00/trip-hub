@@ -30,6 +30,15 @@ function scheduledItems(state:TripState,day:TripDay){
   .sort((a,b)=>a.at.getTime()-b.at.getTime());
 }
 
+function tripStartInstant(state:TripState){
+ const firstDay=state.days[0];
+ if(!firstDay)return undefined;
+ const firstScheduled=scheduledItems(state,firstDay)[0]?.at;
+ if(firstScheduled)return firstScheduled;
+ const zone=resolvedTripTimeZone(state.settings);
+ return zonedDateTime(firstDay.date,'12:00 AM',zone)??undefined;
+}
+
 function currentActivity(state:TripState,day:TripDay,now:Date){
  return scheduledItems(state,day).find(({item,at})=>{
   if(item.done||item.skipped)return false;
@@ -62,18 +71,28 @@ function presentation(args:{state:TripState;now:Date;day:TripDay;current?:{item:
  let status:AssistantStatus='relax';
  let headline=greeting(now,tripZone);
  let subheadline='There is nothing you need to rush toward right now.';
- if(current){
+ const leaveIn=reservation&&leave?minutesBetween(now,leave):undefined;
+
+ // Fixed commitments are the only plans that should create urgency. If a flexible
+ // activity overlaps the leave window, the fixed commitment wins the message.
+ if(reservation&&leave&&leaveIn!==undefined&&leaveIn<=0){
+  status='leaveNow';headline=`It may be time to head toward ${reservation.item.title}.`;subheadline=`It is scheduled for ${reservation.item.time}.`;
+  if(current&&!isFixedItem(current.item))notices.push({type:'timing',message:`${current.item.title} is flexible, so wrap up whenever you are ready.`});
+  notices.push({type:'travel',message:'Open transit directions when you are ready to go.'});
+ }else if(reservation&&leave&&leaveIn!==undefined&&leaveIn<=20){
+  status='leaveSoon';headline=`You may want to leave for ${reservation.item.title} soon.`;subheadline=`You have about ${leaveIn} minutes before the suggested leave time.`;
+  if(current&&!isFixedItem(current.item))notices.push({type:'timing',message:`${current.item.title} is flexible; there is no need to finish everything before leaving.`});
+  notices.push({type:'timing',message:`Suggested departure is around ${formatTimeInZone(leave,itemTimeZone(reservation.item,state.settings),true)}.`});
+ }else if(current){
   status='activity';headline=`You may be at ${current.item.title}.`;
   subheadline=reservation?`Your next fixed event is ${reservation.item.title} at ${reservation.item.time}.`:'Everything else today is flexible.';
  }else if(reservation&&leave){
-  const leaveIn=minutesBetween(now,leave);
-  if(leaveIn<=0){status='leaveNow';headline=`It may be time to head toward ${reservation.item.title}.`;subheadline=`It is scheduled for ${reservation.item.time}.`;notices.push({type:'travel',message:'Open transit directions when you are ready to go.'});}
-  else if(leaveIn<=20){status='leaveSoon';headline=`You may want to leave for ${reservation.item.title} soon.`;subheadline=`You have about ${leaveIn} minutes before the suggested leave time.`;notices.push({type:'timing',message:`Suggested departure is around ${formatTimeInZone(leave,itemTimeZone(reservation.item,state.settings),true)}.`});}
-  else if(availableMinutes>=45){status='explore';headline=`You have about ${availableMinutes} minutes before you need to head out.`;subheadline=`Your next fixed event is ${reservation.item.title} at ${reservation.item.time}.`;}
+  if(availableMinutes>=45){status='explore';headline=`You have about ${availableMinutes} minutes before you need to head out.`;subheadline=`Your next fixed event is ${reservation.item.title} at ${reservation.item.time}.`;}
   else {status='relax';headline=`You have time before ${reservation.item.title}.`;subheadline=`It is scheduled for ${reservation.item.time}.`;}
- }else if(next){status='explore';headline='Everything coming up is flexible.';subheadline=`Your next idea is ${next.item.title} at ${next.item.time}, but there is no fixed commitment attached to it.`;}
- else {status='finished';headline='The rest of the day is open.';subheadline=`There are no remaining scheduled items for ${day.city}.`;}
- if(allRemainingFlexible&&next)notices.push({type:'info',message:'Everything remaining today can be adjusted or skipped.'});
+ }else if(next){
+  status='explore';headline='Everything coming up is flexible.';subheadline=`${next.item.title} is one option for later, but there is no fixed commitment attached to it.`;
+ }else {status='finished';headline='The rest of the day is open.';subheadline=`There are no remaining scheduled items for ${day.city}.`;}
+ if(allRemainingFlexible&&next)notices.push({type:'info',message:'Everything remaining today can be adjusted, skipped, or done in a different order.'});
  return {status,headline,subheadline,notices};
 }
 
@@ -83,16 +102,18 @@ export function buildAssistantState(state:TripState,now=new Date(),location?:Ass
  const effectiveNow=previewWallClock?previewInstant(now,tripZone):now;
  const found=currentDay(state,effectiveNow);
  const day=found.day;
- const tripStart=zonedDateTime(state.days[0].date,'12:00 AM',tripZone)??new Date(`${state.days[0].date}T00:00:00`);
- if(effectiveNow<tripStart)return {currentDay:day,currentDayIndex:found.index,availableMinutes:0,status:'beforeTrip',headline:'Your trip is coming up.',subheadline:`The first day begins ${state.days[0].label}.`,suggestions:[],notices:[],allRemainingFlexible:false};
+ const tripStart=tripStartInstant(state);
+ if(tripStart&&effectiveNow<tripStart)return {currentDay:state.days[0],currentDayIndex:0,availableMinutes:0,status:'beforeTrip',headline:'Your trip is coming up.',subheadline:`The first plan begins ${state.days[0].label}.`,suggestions:[],notices:[],allRemainingFlexible:false};
  const current=currentActivity(state,day,effectiveNow);
  const next=nextItem(state,day,effectiveNow);
  const reservation=nextReservation(state,day,effectiveNow);
  const previous=previousItem(state,day,effectiveNow);
  const leave=reservation?leaveBy(reservation.item,reservation.at):undefined;
- const availableMinutes=leave?Math.max(0,minutesBetween(effectiveNow,leave)):next?Math.max(0,minutesBetween(effectiveNow,next.at)):0;
  const remaining=day.items.filter(item=>!item.done&&!item.skipped);
  const allRemainingFlexible=remaining.length>0&&remaining.every(item=>!isFixedItem(item));
+ // Flexible itinerary times are planning hints, not deadlines. Only a fixed plan
+ // constrains the free-time window; otherwise give the Assistant room to suggest options.
+ const availableMinutes=leave?Math.max(0,minutesBetween(effectiveNow,leave)):allRemainingFlexible?180:next?Math.max(0,minutesBetween(effectiveNow,next.at)):180;
  const shown=presentation({state,now:effectiveNow,day,current,next,reservation,leave,availableMinutes,allRemainingFlexible});
  const suggestionAnchor=current?.item??previous?.item??next?.item;
  const suggestions=(shown.status==='explore'||shown.status==='relax')&&availableMinutes>=30?findSuggestionCandidates(state,day,availableMinutes,3,{anchor:suggestionAnchor,anchorArea,location,now:effectiveNow,previewWallClock:false}):[];
