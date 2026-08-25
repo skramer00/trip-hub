@@ -1,7 +1,7 @@
 'use client';
 
 import {useDeferredValue,useMemo,useState} from 'react';
-import {dietaryFitLabel,dietaryFits,dietaryPreferenceLabel,dietaryRating,foodPlaceClassification,isFoodPlace,setDietaryRating} from '@/lib/dietary';
+import {activeDietaryPreferences,dietaryFitLabel,dietaryFits,dietaryPreferenceLabel,dietaryRating,foodPlaceClassification,isFoodPlace,setDietaryRating} from '@/lib/dietary';
 import type {DietaryFit,DietaryPreference,Place} from '@/lib/types';
 
 type ReviewFilter='all'|'reviewed'|'unknown'|'not-applicable';
@@ -59,17 +59,17 @@ export default function DietaryReview({places,onEdit,onBulkEdit,onSave}:{places:
  const allVisibleSelected=visibleIds.length>0&&visibleIds.every(id=>selectedIds.has(id));
 
  return <section>
-  <div className="pageIntro"><div><div className="eyebrow">DIETARY REVIEW</div><h2>Build practical restaurant guidance</h2><p className="muted">Rate ordering flexibility, not medical safety. Unreviewed places remain visible as Unknown.</p></div><span className="chip">{completedCount}/{foodPlaces.length} classified</span></div>
+  <div className="pageIntro"><div><div className="eyebrow">DIETARY REVIEW</div><h2>Build practical restaurant guidance</h2><p className="muted">Rate ordering flexibility, not medical safety. Review any diet independently; unreviewed places remain visible as Unknown.</p></div><span className="chip">{completedCount}/{foodPlaces.length} classified</span></div>
   {uncertainPlaces.length>0&&<details className="card dietaryCleanup"><summary><span><strong>{uncertainPlaces.length} place{uncertainPlaces.length===1?' needs':'s need'} food classification</strong><small>Review grocery, market, shopping, and “Other” entries</small></span><span className="chip">Cleanup queue</span></summary><div className="dietaryCleanupSelect"><button className="textButton" onClick={()=>selectPlaces(uncertainPlaces)}>Select all uncertain</button></div><div className="dietaryCleanupList">{uncertainPlaces.map(place=><div className="dietaryCleanupRow" key={place.id}><label className="dietarySelect"><input type="checkbox" checked={selectedIds.has(place.id)} onChange={()=>toggleSelected(place.id)} aria-label={`Select ${place.name}`}/><span/></label><div><strong>{place.name}</strong><span>{place.region} · {place.category}</span></div><div className="placeActions"><button className="btn primary" onClick={()=>{onEdit(place.id,{foodPlace:true});window.setTimeout(onSave,0);}}>Food place</button><button className="btn" onClick={()=>{onEdit(place.id,{foodPlace:false});window.setTimeout(onSave,0);}}>Not food</button></div></div>)}</div></details>}
   <div className="card dietaryReviewSummary">
    <div className="dietaryProgressCopy"><strong>{dietaryPreferenceLabel(preference)}</strong><span>{foodPlaces.length?Math.round(completedCount/foodPlaces.length*100):0}% classified</span></div>
    <div className="dietaryProgress" role="progressbar" aria-label={`${dietaryPreferenceLabel(preference)} review progress`} aria-valuemin={0} aria-valuemax={foodPlaces.length} aria-valuenow={completedCount}><i style={{width:`${foodPlaces.length?completedCount/foodPlaces.length*100:0}%`}}/></div>
    <div className="dietaryStats"><span><strong>{reviewedCount}</strong> reviewed</span><span><strong>{foodPlaces.length-completedCount}</strong> unknown</span><span><strong>{notApplicableCount}</strong> not applicable</span></div>
-   <p className="muted small">Manual ratings and ordering notes are preserved when other place information refreshes.</p>
+   <p className="muted small">Each preference has its own rating and ordering note. Manual ratings are preserved when other place information refreshes.</p>
   </div>
   <div className="card dietaryReviewFilters">
    <input className="field" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Search food places or neighborhoods…" aria-label="Search dietary review places"/>
-   <select className="field" value={preference} onChange={event=>setPreference(event.target.value as DietaryPreference)} aria-label="Dietary preference to review"><option value="low-fodmap">Low-FODMAP</option></select>
+   <select className="field" value={preference} onChange={event=>setPreference(event.target.value as DietaryPreference)} aria-label="Dietary preference to review">{activeDietaryPreferences.map(item=><option value={item.id} key={item.id}>{item.label}</option>)}</select>
    <select className="field" value={region} onChange={event=>setRegion(event.target.value)} aria-label="Filter dietary review by region"><option>All</option><option>Toronto</option><option>Niagara & Buffalo</option></select>
    <select className="field" value={reviewFilter} onChange={event=>setReviewFilter(event.target.value as ReviewFilter)} aria-label="Filter by review status"><option value="all">All food places</option><option value="unknown">Needs review</option><option value="reviewed">Reviewed</option><option value="not-applicable">Not applicable</option></select>
    <div className="dietarySelectShown"><label className="toggleLine"><input type="checkbox" checked={allVisibleSelected} onChange={event=>{if(event.target.checked)selectPlaces(visiblePlaces);else setSelectedIds(current=>{const next=new Set(current);visibleIds.forEach(id=>next.delete(id));return next;});}}/> Select all {visiblePlaces.length} shown</label>{selectedIds.size>0&&<button className="textButton" onClick={()=>setSelectedIds(new Set())}>Clear selection</button>}</div>
