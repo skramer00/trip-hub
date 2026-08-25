@@ -1,7 +1,7 @@
 import {distanceBetweenPlaces,isFixedItem} from '@/lib/assistant';
 import {checkItineraryHours,findItineraryPlace} from '@/lib/place-hours';
 import {suggestPlaceArea} from '@/lib/place-areas';
-import type {ItineraryItem,Place,TripDay} from '@/lib/types';
+import type {ItineraryItem,Place,TravelMode,TripDay} from '@/lib/types';
 
 export type RouteSegment={
  from:Place;
@@ -39,9 +39,23 @@ export function placeArea(place?:Place){
  return place?.area??(place?suggestPlaceArea(place):undefined);
 }
 
-function placeQuery(place:Place){
+export function placeQuery(place:Place){
  if(place.latitude!==undefined&&place.longitude!==undefined)return `${place.latitude},${place.longitude}`;
  return place.formattedAddress||place.name;
+}
+
+export function itineraryStopQuery(item:ItineraryItem,places:Place[]){
+ if(item.locationNotNeeded)return undefined;
+ const place=boardPlace(item,places);
+ return place?placeQuery(place):item.destination?.trim()||undefined;
+}
+
+export function buildGoogleMapsLeg(from:ItineraryItem,to:ItineraryItem,places:Place[],travelMode:TravelMode='transit'){
+ const origin=itineraryStopQuery(from,places);
+ const destination=itineraryStopQuery(to,places);
+ if(!origin||!destination)return undefined;
+ const params=new URLSearchParams({api:'1',origin,destination,travelmode:travelMode});
+ return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
 
 export function dayRouteStops(day:TripDay,places:Place[]):BoardRouteStop[]{

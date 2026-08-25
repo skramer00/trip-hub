@@ -107,3 +107,29 @@ test('before-you-go suggestions save and surface the next preparation task',asyn
  await expect(page.getByText('Confirm local and event transportation')).toBeVisible();
  await expect(page.getByRole('button',{name:'Open checklist'})).toBeVisible();
 });
+
+test('itinerary shows exact between-stop directions and saves the travel mode',async({page})=>{
+ const editorState:TripState={...publicState,days:[{...publicState.days[0],items:[
+  {id:'tower-stop',time:'10:00 AM',title:'CN Tower',done:false,placeId:'tower',destination:'CN Tower'},
+  {id:'market-stop',time:'12:00 PM',title:'St. Lawrence Market',done:false,placeId:'market',destination:'St. Lawrence Market',travelMinutes:14,travelMode:'transit'}
+ ]}]};
+ let saved:TripState|undefined;
+ await page.route('**/api/state',async route=>{
+  if(route.request().method()==='PUT'){
+   saved=route.request().postDataJSON() as TripState;
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({ok:true,cloud:true})});
+   return;
+  }
+  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:editorState,cloud:true,editor:true})});
+ });
+ await page.goto('/');
+ await page.getByRole('button',{name:'Plan',exact:true}).click();
+ await page.getByRole('button',{name:'Edit Itinerary',exact:true}).click();
+ const connector=page.getByLabel('Route from CN Tower to St. Lawrence Market');
+ await expect(connector).toContainText('14 min');
+ const directions=connector.getByRole('link',{name:'Directions ↗'});
+ await expect(directions).toHaveAttribute('href',/origin=CN\+Tower/);
+ await expect(directions).toHaveAttribute('href',/destination=St\.\+Lawrence\+Market/);
+ await connector.getByRole('combobox').selectOption('walking');
+ await expect.poll(()=>saved?.days[0].items[1].travelMode).toBe('walking');
+});

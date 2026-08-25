@@ -1,5 +1,6 @@
 export type ItineraryItemType='reservation'|'activity'|'food'|'travel'|'hotel';
-export type ItineraryItem={id:string,time:string,title:string,details?:string,done:boolean,completedAt?:string,skipped?:boolean,skippedAt?:string,lastRescheduledAt?:string,rescheduledFromDate?:string,optional?:boolean,destination?:string,mapUrl?:string,routeText?:string,keyInfo?:string,confirmationNumber?:string,userNotes?:string,fixed?:boolean,type?:ItineraryItemType,estimatedDuration?:number,travelMinutes?:number,prepBuffer?:number,placeId?:string,locationNotNeeded?:boolean};
+export type TravelMode='walking'|'transit'|'driving';
+export type ItineraryItem={id:string,time:string,title:string,details?:string,done:boolean,completedAt?:string,skipped?:boolean,skippedAt?:string,lastRescheduledAt?:string,rescheduledFromDate?:string,optional?:boolean,destination?:string,mapUrl?:string,routeText?:string,keyInfo?:string,confirmationNumber?:string,userNotes?:string,fixed?:boolean,type?:ItineraryItemType,estimatedDuration?:number,travelMinutes?:number,travelMode?:TravelMode,prepBuffer?:number,placeId?:string,locationNotNeeded?:boolean};
 export type TripDay={date:string,label:string,city:string,items:ItineraryItem[]};
 export type CheckItem={id:string,title:string,category:string,done:boolean,notes?:string,triedAtPlaceId?:string,triedAt?:string,checklistType?:'prep'|'packing',dueDate?:string,completedAt?:string};
 export type Weekday='sunday'|'monday'|'tuesday'|'wednesday'|'thursday'|'friday'|'saturday';

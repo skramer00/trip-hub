@@ -14,7 +14,7 @@ import {deleteReservationAttachment,listReservationAttachments,saveReservationAt
 import type {ReservationAttachment} from '@/lib/attachments';
 import type {ItineraryHoursCheck} from '@/lib/place-hours';
 import type {AssistantLocation,AssistantState,SuggestedPlace} from '@/lib/assistant';
-import type {CheckItem,GooglePlaceCandidate,ItineraryItem,JournalMoment,JournalMomentType,NearbyDietaryMode,NearbyPreset,Place,PublicTripSection,TripCoverTheme,TripSettings,TripState,Weekday} from '@/lib/types';
+import type {CheckItem,GooglePlaceCandidate,ItineraryItem,JournalMoment,JournalMomentType,NearbyDietaryMode,NearbyPreset,Place,PublicTripSection,TravelMode,TripCoverTheme,TripSettings,TripState,Weekday} from '@/lib/types';
 import type {DietaryFit,DietaryPreference} from '@/lib/types';
 import {dietaryFitLabel,dietaryFits,dietaryPreferenceLabel,dietaryPreferences,dietaryRating,isFoodPlace,setDietaryRating} from '@/lib/dietary';
 import {placeSpecialtyFoodIds,placeSpecialtyFoods} from '@/lib/food-specialties';
@@ -26,6 +26,7 @@ import {validateTripState} from '@/lib/trip-validation';
 import type {WeatherResponse} from '@/lib/weather';
 import DietaryReview from '@/components/DietaryReview';
 import TripChecklist from '@/components/TripChecklist';
+import RouteConnector from '@/components/RouteConnector';
 import {lastSyncKey,localStateKey,markCloudSynced,pendingSyncKey,pushCloudState,readLocalState,stageDeviceState} from '@/lib/client-state';
 import {formatPrepDueDate,nextPrepTask,prepDueStatus,prepTasks} from '@/lib/trip-prep';
 
@@ -49,7 +50,7 @@ function publicLandingTab(state:TripState){return publicNavGroups(resolvedTripSe
 type InstallPromptEvent=Event&{prompt:()=>Promise<void>;userChoice:Promise<{outcome:'accepted'|'dismissed'}>};
 type AssistantPreview={date:string;time:string;area:string};
 
-type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'userNotes'|'optional'|'skipped'|'fixed'|'type'|'estimatedDuration'|'travelMinutes'|'prepBuffer'|'placeId'|'locationNotNeeded';
+type EditableKey='time'|'title'|'details'|'destination'|'routeText'|'keyInfo'|'userNotes'|'optional'|'skipped'|'fixed'|'type'|'estimatedDuration'|'travelMinutes'|'travelMode'|'prepBuffer'|'placeId'|'locationNotNeeded';
 type EditableValue=string|boolean|number|undefined;
 const offlineReadyKey='trip-offline-ready-v2';
 const boardHiddenDaysKey='trip-board-hidden-days-v1';
@@ -149,6 +150,7 @@ export default function TripApp(){
  const [shareMessage,setShareMessage]=useState('');
  const [showDailyBrief,setShowDailyBrief]=useState(false);
  const [briefDayIndex,setBriefDayIndex]=useState(0);
+ const [itineraryView,setItineraryView]=useState<'planning'|'details'>('planning');
 
  useEffect(()=>{
   let active=true;
@@ -376,9 +378,10 @@ export default function TripApp(){
   setLocationMessage('');
  }
  function toggleDay(di:number,ii:number){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];item.done=!item.done;if(item.done){item.completedAt=new Date().toISOString();item.skipped=false;delete item.skippedAt;}else delete item.completedAt;void persist(next);}
- function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='fixed'||key==='locationNotNeeded')item[key]=Boolean(value);else if(key==='skipped'){item.skipped=Boolean(value);if(item.skipped)item.skippedAt??=new Date().toISOString();else delete item.skippedAt;}else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
+ function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='fixed'||key==='locationNotNeeded')item[key]=Boolean(value);else if(key==='skipped'){item.skipped=Boolean(value);if(item.skipped)item.skippedAt??=new Date().toISOString();else delete item.skippedAt;}else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else if(key==='travelMode')item.travelMode=String(value) as TravelMode;else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
+ function setTravelMode(di:number,ii:number,mode:TravelMode){if(!state)return;const next=structuredClone(state);next.days[di].items[ii].travelMode=mode;void persist(next);}
  function saveEdits(di?:number){const latest=readLocalState(localStorage)??state;if(!latest)return;const next=structuredClone(latest);if(di!==undefined)next.days[di].items=sortItems(next.days[di].items);void persist(next);}
- function addItem(di:number){if(!state)return;const next=structuredClone(state);next.days[di].items.push({id:`custom-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:'12:00 PM',title:'New stop',details:'',destination:'',routeText:'',keyInfo:'',userNotes:'',done:false,optional:false,fixed:false,type:'activity',estimatedDuration:60,travelMinutes:20,prepBuffer:15});next.days[di].items=sortItems(next.days[di].items);void persist(next);}
+ function addItem(di:number){if(!state)return;const next=structuredClone(state);next.days[di].items.push({id:`custom-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:'12:00 PM',title:'New stop',details:'',destination:'',routeText:'',keyInfo:'',userNotes:'',done:false,optional:false,fixed:false,type:'activity',estimatedDuration:60,travelMinutes:20,travelMode:'transit',prepBuffer:15});next.days[di].items=sortItems(next.days[di].items);void persist(next);}
  function addPlaceToItinerary(place:Place,di:number,optional=false){
   if(!state)return;
   const next=structuredClone(state);
@@ -401,6 +404,7 @@ export default function TripApp(){
    type,
    estimatedDuration:place.estimatedDuration??60,
    travelMinutes:20,
+   travelMode:'transit',
    prepBuffer:15,
    placeId:place.id
   });
@@ -853,7 +857,7 @@ export default function TripApp(){
     {nextStep?<div className="card nextStepCard" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><div className="between" style={{alignItems:'flex-start',gap:'16px',marginTop:'6px'}}><div><h2 style={{marginBottom:'4px'}}>{nextStep.title}</h2><div className="muted">{nextStep.time}</div>{nextStep.details&&<p>{nextStep.details}</p>}{nextStep.routeText&&<p className="muted small">🚌 {nextStep.routeText}</p>}{(nextStep.keyInfo||nextStep.confirmationNumber)&&<div style={{marginTop:'12px'}}><strong>Key Info</strong><p style={{whiteSpace:'pre-wrap',marginTop:'4px'}}>{nextStep.keyInfo??nextStep.confirmationNumber}</p></div>}</div><span className="chip">{nextStepIndex+1} of {currentDay.items.length}</span></div><div className="placeActions" style={{marginTop:'14px'}}>{nextStep.mapUrl&&<a className="btn primary" href={nextStep.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}<button className="btn" onClick={()=>toggleDay(currentDayIndex,nextStepIndex)}>Mark complete</button></div></div>:<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><h2 style={{marginTop:'6px'}}>You’re done for today</h2><p className="muted">Every itinerary item for this day is complete.</p></div>}
     <div className="statGrid"><div className="stat"><span>Trip progress</span><strong>{completedTrip}/{tripProgress.length}</strong></div><div className="stat"><span>Saved places</span><strong>{state.places.length}</strong></div><div className="stat"><span>Foods remaining</span><strong>{state.foods.filter(i=>!i.done).length}</strong></div></div>
     <h2 className="sectionTitle">Today’s plan</h2>
-    {currentDay.items.map((item,index)=>{const hoursCheck=checkItineraryHours(item,currentDay.date,state.places);return <div className={`card timelineItem ${item.done?'done':''} ${item.skipped?'skipped':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(currentDayIndex,index)}/><div className="timeBadge">{item.time}</div><ItineraryDetails item={item} places={state.places} dayIndex={currentDayIndex} itemIndex={index} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(currentDayIndex)} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div>;})}
+    {currentDay.items.map((item,index)=>{const hoursCheck=checkItineraryHours(item,currentDay.date,state.places);return <div className="timelineStack" key={item.id}>{index>0&&<RouteConnector from={currentDay.items[index-1]} to={item} places={state.places} editable={editorView} onModeChange={mode=>setTravelMode(currentDayIndex,index,mode)}/>}<div className={`card timelineItem ${item.done?'done':''} ${item.skipped?'skipped':''}`}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(currentDayIndex,index)}/><div className="timeBadge">{item.time}</div><ItineraryDetails item={item} places={state.places} dayIndex={currentDayIndex} itemIndex={index} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(currentDayIndex)} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div></div>;})}
     <div className="between sectionHeading"><h2 className="sectionTitle">Recommended for this day</h2><button className="textButton" onClick={()=>{setRegion(currentDay.city.includes('Toronto')?'Toronto':'Niagara & Buffalo');setArea('All');setTab('Places');}}>See all</button></div>
     <div className="grid compactGrid">{nearbySuggestions.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>
    </section>}
@@ -878,11 +882,11 @@ export default function TripApp(){
     setPriority('All');
     setTab('Places');
    }}/>}
-   {tab==='Board'&&<TripBoard days={state.days} places={state.places} canUndo={Boolean(boardUndo)} onUndo={undoBoardChange} onMove={moveBoardItem} onDuplicate={duplicateBoardItem} onAdd={addBoardItem} onAddPlace={addBoardPlace} onOptimize={optimizeBoardDay} onToggle={toggleDay} onOpenItem={itemId=>{
+   {tab==='Board'&&<TripBoard days={state.days} places={state.places} canUndo={Boolean(boardUndo)} onUndo={undoBoardChange} onMove={moveBoardItem} onDuplicate={duplicateBoardItem} onAdd={addBoardItem} onAddPlace={addBoardPlace} onOptimize={optimizeBoardDay} onToggle={toggleDay} onTravelMode={setTravelMode} onOpenItem={itemId=>{
     setTab('Itinerary');
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
-   {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2></div><div className="placeActions">{itineraryHoursIssues.length>0&&<span className="chip hoursIssueCount">{itineraryHoursIssues.length} hours notice{itineraryHoursIssues.length===1?'':'s'}</span>}<span className="chip">{completedTrip}/{tripProgress.length} complete</span></div></div>{state.days.map((day,di)=><article className="card dayCard" key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>addItem(di)}>+ Add stop</button></div></div>{day.items.map((item,ii)=>{const hoursCheck=checkItineraryHours(item,day.date,state.places);return <div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`} key={item.id}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor item={item} dayIndex={di} itemIndex={ii} days={state.days} places={state.places} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div></div>;})}</article>)}</section>}
+   {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2><p className="muted">Use Planning view for a clean route-first outline, or Details when you need every note and setting.</p></div><div className="itineraryHeaderActions"><div className="viewSwitch" aria-label="Itinerary view"><button className={itineraryView==='planning'?'active':''} onClick={()=>setItineraryView('planning')}>Planning</button><button className={itineraryView==='details'?'active':''} onClick={()=>setItineraryView('details')}>Details</button></div><div className="placeActions">{itineraryHoursIssues.length>0&&<span className="chip hoursIssueCount">{itineraryHoursIssues.length} hours notice{itineraryHoursIssues.length===1?'':'s'}</span>}<span className="chip">{completedTrip}/{tripProgress.length} complete</span></div></div></div>{state.days.map((day,di)=><article className={`card dayCard itinerary-${itineraryView}`} key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>addItem(di)}>+ Add stop</button></div></div>{day.items.map((item,ii)=>{const hoursCheck=checkItineraryHours(item,day.date,state.places);return <div className="itineraryStack" key={item.id}>{ii>0&&<RouteConnector from={day.items[ii-1]} to={item} places={state.places} editable onModeChange={mode=>setTravelMode(di,ii,mode)}/>}<div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor compact={itineraryView==='planning'} item={item} dayIndex={di} itemIndex={ii} days={state.days} places={state.places} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div></div></div>;})}</article>)}</section>}
    {tab==='Locations'&&<LocationResolver days={state.days} places={state.places} canUndo={Boolean(locationUndo)} onUndo={undoLocationChange} onLink={linkItineraryLocation} onGoogleLink={linkGoogleItineraryLocation} onClear={clearItineraryLocation} onCreate={createAndLinkItineraryLocation} onSetNotNeeded={setLocationNotNeeded} onAssignAreas={assignSuggestedAreas} onOpenItem={itemId=>{setTab('Itinerary');window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);}}/>}
    {tab==='Reservations'&&<ReservationsView reservations={reservations} onShowItem={itemId=>{
     setTab('Itinerary');
@@ -1047,7 +1051,7 @@ function TripReadinessDashboard({readiness,onOpen,onQuickFix,onIgnore,onRestore}
 
 type DragPosition={dayIndex:number;itemIndex:number};
 
-function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPlace,onOptimize,onToggle,onOpenItem}:{days:TripState['days'];places:Place[];canUndo:boolean;onUndo:()=>void;onMove:(fromDay:number,fromIndex:number,toDay:number,toIndex:number)=>void;onDuplicate:(dayIndex:number,itemIndex:number)=>void;onAdd:(dayIndex:number)=>void;onAddPlace:(place:Place,dayIndex:number)=>void;onOptimize:(dayIndex:number)=>void;onToggle:(dayIndex:number,itemIndex:number)=>void;onOpenItem:(itemId:string)=>void}){
+function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPlace,onOptimize,onToggle,onTravelMode,onOpenItem}:{days:TripState['days'];places:Place[];canUndo:boolean;onUndo:()=>void;onMove:(fromDay:number,fromIndex:number,toDay:number,toIndex:number)=>void;onDuplicate:(dayIndex:number,itemIndex:number)=>void;onAdd:(dayIndex:number)=>void;onAddPlace:(place:Place,dayIndex:number)=>void;onOptimize:(dayIndex:number)=>void;onToggle:(dayIndex:number,itemIndex:number)=>void;onTravelMode:(dayIndex:number,itemIndex:number,mode:TravelMode)=>void;onOpenItem:(itemId:string)=>void}){
  const [dragging,setDragging]=useState<DragPosition|null>(null);
  const [draggingPlaceId,setDraggingPlaceId]=useState<string|null>(null);
  const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
@@ -1156,8 +1160,8 @@ function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPla
         <div className="boardRouteSummary"><div><strong>{route.linkedStops} routed stops</strong><span>{route.totalTravelMinutes?`≈ ${route.totalTravelMinutes} min transit · ${route.totalDistanceKm.toFixed(1)} km`:'Add linked places for travel estimates'}</span></div><div className="boardRouteActions"><button className="textButton" onClick={()=>setRouteDayIndex(di)}>View route</button><button className="textButton" onClick={()=>onOptimize(di)} disabled={!route.canOptimize}>Suggest order</button></div></div>
         {route.warnings.length>0&&<div className="boardRouteWarnings">{route.warnings.slice(0,2).map(warning=><span key={warning}>⚠ {warning}</span>)}</div>}
         <div className="boardCards">
-         {day.items.map((item,ii)=>{const boardType=inferItemType(item);const linkedPlace=boardPlace(item,places);const linkedArea=placeArea(linkedPlace);const segment=route.segments.get(item.id);return <div className="boardCardStack" key={item.id}>
-          {segment&&<div className={`boardRouteGap route-${segment.kind}`}>↳ {segment.label}</div>}
+         {day.items.map((item,ii)=>{const boardType=inferItemType(item);const linkedPlace=boardPlace(item,places);const linkedArea=placeArea(linkedPlace);return <div className="boardCardStack" key={item.id}>
+          {ii>0&&<RouteConnector compact editable from={day.items[ii-1]} to={item} places={places} onModeChange={mode=>onTravelMode(di,ii,mode)}/>}
           <article className={`boardCard board-${boardType} ${item.done?'complete':''} ${dragging?.dayIndex===di&&dragging.itemIndex===ii?'dragging':''}`} draggable onDragStart={event=>{setDragging({dayIndex:di,itemIndex:ii});setDraggingPlaceId(null);event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',item.id);}} onDragEnd={()=>setDragging(null)} onDragOver={event=>event.preventDefault()} onDrop={event=>{event.stopPropagation();dropAt(event,di,ii);}}>
            <div className="boardCardTop"><button className="dragHandle" aria-label={`Drag ${item.title}`} title="Drag to move">⋮⋮</button><span className="boardTime">{item.time}</span><label className="boardCheck"><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>onToggle(di,ii)}/></label></div>
            <button className="boardCardTitle" onClick={()=>onOpenItem(item.id)}>{item.title}</button>
@@ -1376,7 +1380,7 @@ function formatFileSize(bytes:number){
  return `${(bytes/(1024*1024)).toFixed(1)} MB`;
 }
 
-function ItineraryEditor({item,dayIndex,itemIndex,days,places,hoursCheck,onEdit,onSave,onMove,onReorder,onDelete,onShowPlace}:{item:ItineraryItem;dayIndex:number;itemIndex:number;days:TripState['days'];places:Place[];hoursCheck?:ItineraryHoursCheck;onEdit:(di:number,ii:number,key:EditableKey,value:EditableValue)=>void;onSave:()=>void;onMove:(di:number,ii:number,target:number)=>void;onReorder:(di:number,ii:number,direction:-1|1)=>void;onDelete:(di:number,ii:number)=>void;onShowPlace:(place:Place)=>void}){
+function ItineraryEditor({item,dayIndex,itemIndex,days,places,hoursCheck,compact=false,onEdit,onSave,onMove,onReorder,onDelete,onShowPlace}:{item:ItineraryItem;dayIndex:number;itemIndex:number;days:TripState['days'];places:Place[];hoursCheck?:ItineraryHoursCheck;compact?:boolean;onEdit:(di:number,ii:number,key:EditableKey,value:EditableValue)=>void;onSave:()=>void;onMove:(di:number,ii:number,target:number)=>void;onReorder:(di:number,ii:number,direction:-1|1)=>void;onDelete:(di:number,ii:number)=>void;onShowPlace:(place:Place)=>void}){
  const [open,setOpen]=useState(false);
  const [saved,setSaved]=useState(false);
  const inferredDuration=estimatedItemDuration(item);
@@ -1393,8 +1397,8 @@ function ItineraryEditor({item,dayIndex,itemIndex,days,places,hoursCheck,onEdit,
    <div>
     <div className="titleRow"><h3>{item.title}</h3><span className={`chip ${fixed?'':'neutral'}`}>{fixed?'Fixed':'Flexible'}</span><span className="chip neutral">{itemType}</span>{linkedArea&&<span className="chip boardArea">{linkedArea.split(' — ').at(-1)}</span>}{item.optional&&<span className="chip neutral">Optional</span>}{item.skipped&&<span className="chip skippedChip">Skipped for now</span>}{hoursCheck&&<span className={`itineraryHoursBadge check-${hoursCheck.status}`}>{hoursCheck.label}</span>}</div>
     <div className="muted small">{item.time}{item.destination?` · ${item.destination}`:''}{` · ${inferredDuration} min`}</div>
-    {item.details&&<p className="muted small">{item.details}</p>}
-    {hoursCheck&&hoursCheck.status!=='open'&&<div className={`itineraryHoursNotice check-${hoursCheck.status}`}><div><strong>{hoursCheck.place.name}</strong><p>{hoursCheck.message}</p></div><button className="textButton" onClick={()=>onShowPlace(hoursCheck.place)}>Review place</button></div>}
+    {!compact&&item.details&&<p className="muted small">{item.details}</p>}
+    {!compact&&hoursCheck&&hoursCheck.status!=='open'&&<div className={`itineraryHoursNotice check-${hoursCheck.status}`}><div><strong>{hoursCheck.place.name}</strong><p>{hoursCheck.message}</p></div><button className="textButton" onClick={()=>onShowPlace(hoursCheck.place)}>Review place</button></div>}
    </div>
    <button className="btn" onClick={()=>setOpen(value=>!value)}>{open?'Close':'Edit'}</button>
   </div>
@@ -1408,6 +1412,7 @@ function ItineraryEditor({item,dayIndex,itemIndex,days,places,hoursCheck,onEdit,
     <label className="small">Activity type<select className="field" value={itemType} onChange={event=>{onEdit(dayIndex,itemIndex,'type',event.target.value);save();}}><option value="reservation">Reservation</option><option value="activity">Activity</option><option value="food">Food</option><option value="travel">Travel</option><option value="hotel">Hotel</option></select></label>
     <label className="small">Duration (minutes)<input className="field" type="number" min="0" step="5" value={item.estimatedDuration??''} placeholder={String(inferredDuration)} onChange={event=>onEdit(dayIndex,itemIndex,'estimatedDuration',event.target.value===''?undefined:Number(event.target.value))} onBlur={save}/></label>
     <label className="small">Travel time (minutes)<input className="field" type="number" min="0" step="5" value={item.travelMinutes??''} placeholder="20" onChange={event=>onEdit(dayIndex,itemIndex,'travelMinutes',event.target.value===''?undefined:Number(event.target.value))} onBlur={save}/></label>
+    <label className="small">Travel mode<select className="field" value={item.travelMode??'transit'} onChange={event=>{onEdit(dayIndex,itemIndex,'travelMode',event.target.value);save();}}><option value="walking">Walking</option><option value="transit">Public transit</option><option value="driving">Driving</option></select></label>
     <label className="small">Preparation buffer<input className="field" type="number" min="0" step="5" value={item.prepBuffer??''} placeholder="15" onChange={event=>onEdit(dayIndex,itemIndex,'prepBuffer',event.target.value===''?undefined:Number(event.target.value))} onBlur={save}/></label>
    </div>
    <p className="muted small planningHint">Travel time and preparation buffer determine the Assistant’s suggested leave time for fixed plans.</p>
