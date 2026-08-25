@@ -4,13 +4,15 @@ export type DietaryPlaceFitFilter='any'|'recommended'|'easy';
 
 export const dietaryPreferences: {id:DietaryPreference;label:string;active:boolean}[]=[
  {id:'low-fodmap',label:'Low-FODMAP',active:true},
- {id:'gluten-free',label:'Gluten-free',active:false},
- {id:'vegetarian',label:'Vegetarian',active:false},
- {id:'vegan',label:'Vegan',active:false},
- {id:'dairy-free',label:'Dairy-free',active:false},
- {id:'pescatarian',label:'Pescatarian',active:false},
- {id:'nut-aware',label:'Nut-aware',active:false}
+ {id:'gluten-free',label:'Gluten-free',active:true},
+ {id:'vegetarian',label:'Vegetarian',active:true},
+ {id:'vegan',label:'Vegan',active:true},
+ {id:'dairy-free',label:'Dairy-free',active:true},
+ {id:'pescatarian',label:'Pescatarian',active:true},
+ {id:'nut-aware',label:'Nut-aware',active:true}
 ];
+
+export const activeDietaryPreferences=dietaryPreferences.filter(preference=>preference.active);
 
 export const dietaryFits: {id:DietaryFit;label:string;description:string}[]=[
  {id:'easy',label:'Easy',description:'Straightforward options available'},
