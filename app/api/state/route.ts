@@ -85,17 +85,18 @@ function mergeState(stored:TripState):TripState{
  };
 }
 
+function freshState():TripState{return {...initialState,packing:migrateChecklist(initialState.packing),places:applyDietaryGuidance(initialState.places)};}
 async function editorRequest(){return validToken((await cookies()).get('trip_auth')?.value);}
 
 export async function GET(){
  try{
   const stored=await loadState();
-  const state=stored?mergeState(stored):{...initialState,places:applyDietaryGuidance(initialState.places)};
+  const state=stored?mergeState(stored):freshState();
   const editor=await editorRequest();
   return NextResponse.json({state:editor?state:publicTripState(state),cloud:true,editor});
  }catch(error){
   console.error('Trip state load failed; using local fallback.',error);
-  const state={...initialState,places:applyDietaryGuidance(initialState.places)};
+  const state=freshState();
   const editor=await editorRequest();
   return NextResponse.json({state:editor?state:publicTripState(state),cloud:false,editor});
  }
