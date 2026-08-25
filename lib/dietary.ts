@@ -1,5 +1,7 @@
 import type {DietaryFit,DietaryPreference,Place} from '@/lib/types';
 
+export type DietaryPlaceFitFilter='any'|'recommended'|'easy';
+
 export const dietaryPreferences: {id:DietaryPreference;label:string;active:boolean}[]=[
  {id:'low-fodmap',label:'Low-FODMAP',active:true},
  {id:'gluten-free',label:'Gluten-free',active:false},
@@ -21,6 +23,12 @@ export const dietaryFits: {id:DietaryFit;label:string;description:string}[]=[
 export function dietaryPreferenceLabel(preference:DietaryPreference){return dietaryPreferences.find(item=>item.id===preference)?.label??preference;}
 export function dietaryFitLabel(fit:DietaryFit){return dietaryFits.find(item=>item.id===fit)?.label??fit;}
 export function dietaryRating(place:Place,preference:DietaryPreference){return place.dietaryRatings?.find(rating=>rating.preference===preference);}
+export function placeMatchesDietaryFilter(place:Place,preference:DietaryPreference,filter:DietaryPlaceFitFilter){
+ const rating=dietaryRating(place,preference);
+ if(filter==='any')return true;
+ if(filter==='recommended')return rating?.fit==='easy'||rating?.fit==='workable';
+ return rating?.fit==='easy';
+}
 export type FoodPlaceClassification='food'|'not-food'|'uncertain';
 export function foodPlaceClassification(place:Place):FoodPlaceClassification{
  if(place.foodPlace===true)return 'food';

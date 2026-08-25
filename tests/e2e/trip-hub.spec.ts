@@ -33,6 +33,29 @@ test('saved places are organized into neighborhood sections',async({page})=>{
  await expect(page.getByText('St. Lawrence Market',{exact:true})).toBeVisible();
 });
 
+test('place dietary filters clearly distinguish easy, recommended, and unfiltered results',async({page})=>{
+ const editorState:TripState={...publicState,dietaryPreferences:['low-fodmap'],places:[
+  {...publicState.places[0],foodPlace:true,dietaryRatings:[{preference:'low-fodmap',fit:'easy'}]},
+  {...publicState.places[1],foodPlace:true,dietaryRatings:[{preference:'low-fodmap',fit:'difficult'}]}
+ ]};
+ await page.route('**/api/state',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:editorState,cloud:true,editor:true})}));
+ await page.goto('/');
+ await page.getByRole('button',{name:'Explore',exact:true}).click();
+ await page.getByRole('button',{name:'Saved Places',exact:true}).click();
+ await page.getByRole('button',{name:'Low-FODMAP',exact:true}).click();
+ await expect(page.getByText('St. Lawrence Market',{exact:true})).toBeVisible();
+ await expect(page.getByText('CN Tower',{exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Easy',exact:true}).click();
+ await expect(page.getByText('St. Lawrence Market',{exact:true})).toBeVisible();
+ await expect(page.getByText('CN Tower',{exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'Any',exact:true}).last().click();
+ await expect(page.getByText('CN Tower',{exact:true})).toBeVisible();
+ await expect(page.getByText('St. Lawrence Market',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Clear filters',exact:true}).click();
+ await expect(page.getByText('CN Tower',{exact:true})).toBeVisible();
+ await expect(page.getByText('St. Lawrence Market',{exact:true})).toBeVisible();
+});
+
 test('editor itinerary changes are sent to shared saving',async({page})=>{
  const editorState:TripState={...publicState,days:[{...publicState.days[0],items:[{...publicState.days[0].items[0],keyInfo:'Private confirmation'}]}]};
  let saved:TripState|undefined;
