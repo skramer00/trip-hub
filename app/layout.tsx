@@ -1,6 +1,7 @@
 import './globals.css';
 import './settings.css';
 import type {Metadata,Viewport} from 'next';
+import FoodListEditor from '@/components/FoodListEditor';
 
 export const metadata:Metadata={
  metadataBase:new URL('https://www.skramer.app'),
@@ -10,4 +11,4 @@ export const metadata:Metadata={
  appleWebApp:{capable:true,statusBarStyle:'default',title:'Trip Hub'},
 };
 export const viewport:Viewport={themeColor:'#103b2a'};
-export default function RootLayout({children}:{children:React.ReactNode}){return <html lang="en"><body>{children}</body></html>}
+export default function RootLayout({children}:{children:React.ReactNode}){return <html lang="en"><body>{children}<FoodListEditor/></body></html>}
