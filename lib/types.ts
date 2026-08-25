@@ -1,6 +1,6 @@
 export type ItineraryItemType='reservation'|'activity'|'food'|'travel'|'hotel';
 export type TravelMode='walking'|'transit'|'driving';
-export type ItineraryItem={id:string,time:string,title:string,details?:string,done:boolean,completedAt?:string,skipped?:boolean,skippedAt?:string,lastRescheduledAt?:string,rescheduledFromDate?:string,optional?:boolean,destination?:string,mapUrl?:string,routeText?:string,keyInfo?:string,confirmationNumber?:string,userNotes?:string,fixed?:boolean,type?:ItineraryItemType,estimatedDuration?:number,travelMinutes?:number,travelMode?:TravelMode,prepBuffer?:number,placeId?:string,locationNotNeeded?:boolean};
+export type ItineraryItem={id:string,time:string,title:string,details?:string,done:boolean,completedAt?:string,skipped?:boolean,skippedAt?:string,lastRescheduledAt?:string,rescheduledFromDate?:string,optional?:boolean,destination?:string,mapUrl?:string,routeText?:string,keyInfo?:string,confirmationNumber?:string,userNotes?:string,fixed?:boolean,type?:ItineraryItemType,estimatedDuration?:number,travelMinutes?:number,travelMode?:TravelMode,prepBuffer?:number,placeId?:string,locationNotNeeded?:boolean,timeZone?:string};
 export type TripDay={date:string,label:string,city:string,items:ItineraryItem[]};
 export type CheckItem={id:string,title:string,category:string,done:boolean,notes?:string,triedAtPlaceId?:string,triedAt?:string,checklistType?:'prep'|'packing',dueDate?:string,completedAt?:string};
 export type Weekday='sunday'|'monday'|'tuesday'|'wednesday'|'thursday'|'friday'|'saturday';
@@ -18,5 +18,5 @@ export type NearbyPreset={id:string,name:string,foodOnly:boolean,query:string,re
 export type GooglePlaceCandidate={googlePlaceId:string;name:string;formattedAddress?:string;latitude?:number;longitude?:number;mapUrl?:string;websiteUrl?:string;weeklyHours?:Partial<Record<Weekday,PlaceHoursRange>>};
 export type PublicTripSection='overview'|'today'|'recap'|'explore'|'food';
 export type TripCoverTheme='forest'|'lake'|'sunset';
-export type TripSettings={version:number;title:string;destinations:string;startDate:string;endDate:string;publicMessage:string;coverTheme:TripCoverTheme;publicSections:PublicTripSection[]};
+export type TripSettings={version:number;title:string;destinations:string;startDate:string;endDate:string;publicMessage:string;coverTheme:TripCoverTheme;publicSections:PublicTripSection[];homeTimeZone?:string;tripTimeZone?:string};
 export type TripState={days:TripDay[],foods:CheckItem[],packing:CheckItem[],places:Place[],settings?:TripSettings,dietaryPreferences?:DietaryPreference[],mealBalanceByDate?:Record<string,DailyMealBalance>,journalNotesByDate?:Record<string,string>,journalMoments?:JournalMoment[],nearbyPresets?:NearbyPreset[],defaultNearbyPresetId?:string,readinessIgnoredActionIds?:string[]};
