@@ -17,6 +17,22 @@ describe('client trip persistence',()=>{
   expect(readLocalState(storage,'boston-2027')).toEqual(trip);
  });
 
+ it('keeps two trips isolated in device storage and pending-sync state',()=>{
+  const values=new Map<string,string>();
+  const storage={getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>values.set(key,value),removeItem:(key:string)=>values.delete(key)};
+  const toronto={...trip,journalNotesByDate:{'2026-09-24':'Toronto note'}};
+  const boston={...trip,journalNotesByDate:{'2027-10-02':'Boston note'}};
+  stageDeviceState(storage,toronto,DEFAULT_TRIP_ID);
+  stageDeviceState(storage,boston,'boston-2027');
+  expect(readLocalState(storage,DEFAULT_TRIP_ID)).toEqual(toronto);
+  expect(readLocalState(storage,'boston-2027')).toEqual(boston);
+  expect(values.get(scopedStorageKey(pendingSyncKey,DEFAULT_TRIP_ID))).toBe('true');
+  expect(values.get(scopedStorageKey(pendingSyncKey,'boston-2027'))).toBe('true');
+  markCloudSynced(storage,'2026-08-26T19:00:00.000Z','boston-2027');
+  expect(values.get(scopedStorageKey(pendingSyncKey,DEFAULT_TRIP_ID))).toBe('true');
+  expect(values.has(scopedStorageKey(pendingSyncKey,'boston-2027'))).toBe(false);
+ });
+
  it('ignores a damaged device copy',()=>{
   expect(readLocalState({getItem:()=>'{not json'})).toBeNull();
  });
