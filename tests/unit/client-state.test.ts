@@ -35,4 +35,20 @@ describe('client trip persistence',()=>{
   const fetcher=vi.fn(async()=>new Response(JSON.stringify({cloud:false,error:'Changes remain on this device.'}),{status:503,headers:{'content-type':'application/json'}}));
   await expect(pushCloudState(trip,fetcher)).rejects.toThrow('Changes remain on this device.');
  });
+
+ it('serializes rapid saves and only marks the newest request as current',async()=>{
+  const calls:string[]=[];
+  const fetcher=vi.fn(async(_url:RequestInfo|URL,init?:RequestInit)=>{
+   calls.push(String(init?.body));
+   await new Promise(resolve=>setTimeout(resolve,5));
+   return new Response(JSON.stringify({cloud:true}),{status:200,headers:{'content-type':'application/json'}});
+  });
+  const first={...trip,journalNotesByDate:{'2026-09-25':'first'}};
+  const second={...trip,journalNotesByDate:{'2026-09-25':'second'}};
+  const firstSave=pushCloudState(first,fetcher);
+  const secondSave=pushCloudState(second,fetcher);
+  await expect(firstSave).resolves.toBe(false);
+  await expect(secondSave).resolves.toBe(true);
+  expect(calls).toEqual([JSON.stringify(first),JSON.stringify(second)]);
+ });
 });
