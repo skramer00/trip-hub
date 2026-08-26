@@ -2,6 +2,7 @@ import fs from 'node:fs';
 const path='components/TripApp.tsx';
 let text=fs.readFileSync(path,'utf8');
 if(!text.includes("from '@/lib/active-trip'"))text=text.replace("import {formatPrepDueDate,nextPrepTask,prepDueStatus,prepTasks} from '@/lib/trip-prep';", "import {formatPrepDueDate,nextPrepTask,prepDueStatus,prepTasks} from '@/lib/trip-prep';\nimport {activeTripId,stateApiUrl} from '@/lib/active-trip';\nimport {scopedStorageKey} from '@/lib/client-state';");
+if(!text.includes("from '@/components/TripSwitcher'"))text=text.replace("import AddToDayPanel from '@/components/AddToDayPanel';", "import AddToDayPanel from '@/components/AddToDayPanel';\nimport TripSwitcher from '@/components/TripSwitcher';");
 text=text.replaceAll("fetch('/api/state'", "fetch(stateApiUrl()");
 text=text.replaceAll('readLocalState(localStorage)', 'readLocalState(localStorage,activeTripId())');
 text=text.replaceAll('pushCloudState(local)', 'pushCloudState(local,fetch,activeTripId())');
@@ -14,4 +15,5 @@ text=text.replaceAll('localStorage.getItem(lastSyncKey)', 'localStorage.getItem(
 text=text.replaceAll('localStorage.setItem(localStateKey,JSON.stringify(selected))', 'localStorage.setItem(scopedStorageKey(localStateKey,activeTripId()),JSON.stringify(selected))');
 text=text.replaceAll('localStorage.setItem(localStateKey,JSON.stringify(loaded.state))', 'localStorage.setItem(scopedStorageKey(localStateKey,activeTripId()),JSON.stringify(loaded.state))');
 text=text.replaceAll("localStorage.setItem('trip-state',JSON.stringify(next))", 'localStorage.setItem(scopedStorageKey(localStateKey,activeTripId()),JSON.stringify(next))');
+text=text.replace('<div className="headerActions"><span className={`sync syncStack', '<div className="headerActions"><TripSwitcher/><span className={`sync syncStack');
 fs.writeFileSync(path,text);
