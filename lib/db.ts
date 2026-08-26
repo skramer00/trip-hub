@@ -25,7 +25,6 @@ export async function loadState(tripId=DEFAULT_TRIP_ID):Promise<TripState|null>{
  const id=normalizeTripId(tripId);
  const direct=await stateForId(id);
  if(direct)return direct;
- // Seamless migration: the existing production trip still lives under toronto-2026.
  if(id===DEFAULT_TRIP_ID)return stateForId(LEGACY_TRIP_ID);
  return null;
 }
@@ -34,6 +33,14 @@ export async function saveState(state:TripState,tripId=DEFAULT_TRIP_ID){
  const id=normalizeTripId(tripId);
  const ordered=normalizeItineraryOrder(state);
  const {error}=await db().from('trip_state').upsert({id,state:ordered,updated_at:new Date().toISOString()});
+ if(error)throw error;
+ return true;
+}
+
+export async function deleteState(tripId:string){
+ const id=normalizeTripId(tripId);
+ const target=id===DEFAULT_TRIP_ID?LEGACY_TRIP_ID:id;
+ const {error}=await db().from('trip_state').delete().eq('id',target);
  if(error)throw error;
  return true;
 }
