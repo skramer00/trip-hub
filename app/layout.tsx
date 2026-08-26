@@ -2,6 +2,7 @@ import './globals.css';
 import './settings.css';
 import './mobile.css';
 import './trips/trips.css';
+import './itinerary-import.css';
 import type {Metadata,Viewport} from 'next';
 import FoodListEditor from '@/components/FoodListEditor';
 
