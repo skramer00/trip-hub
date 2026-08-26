@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "node scripts/apply-source-fixes.mjs",
+    "predev": "node scripts/apply-source-fixes.mjs && node scripts/scope-trip-runtime.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/apply-source-fixes.mjs",
+    "prebuild": "node scripts/apply-source-fixes.mjs && node scripts/scope-trip-runtime.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
