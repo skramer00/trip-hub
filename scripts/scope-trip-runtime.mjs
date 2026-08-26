@@ -1,0 +1,16 @@
+import fs from 'node:fs';
+const path='components/TripApp.tsx';
+let text=fs.readFileSync(path,'utf8');
+if(!text.includes("from '@/lib/active-trip'"))text=text.replace("import {formatPrepDueDate,nextPrepTask,prepDueStatus,prepTasks} from '@/lib/trip-prep';", "import {formatPrepDueDate,nextPrepTask,prepDueStatus,prepTasks} from '@/lib/trip-prep';\nimport {activeTripId,stateApiUrl} from '@/lib/active-trip';\nimport {scopedStorageKey} from '@/lib/client-state';");
+text=text.replaceAll("fetch('/api/state'", "fetch(stateApiUrl()");
+text=text.replaceAll('readLocalState(localStorage)', 'readLocalState(localStorage,activeTripId())');
+text=text.replaceAll('pushCloudState(local)', 'pushCloudState(local,fetch,activeTripId())');
+text=text.replaceAll('pushCloudState(next)', 'pushCloudState(next,fetch,activeTripId())');
+text=text.replaceAll('stageDeviceState(localStorage,next)', 'stageDeviceState(localStorage,next,activeTripId())');
+text=text.replaceAll('markCloudSynced(localStorage)', 'markCloudSynced(localStorage,new Date().toISOString(),activeTripId())');
+text=text.replaceAll('localStorage.getItem(pendingSyncKey)', 'localStorage.getItem(scopedStorageKey(pendingSyncKey,activeTripId()))');
+text=text.replaceAll('localStorage.removeItem(pendingSyncKey)', 'localStorage.removeItem(scopedStorageKey(pendingSyncKey,activeTripId()))');
+text=text.replaceAll('localStorage.getItem(lastSyncKey)', 'localStorage.getItem(scopedStorageKey(lastSyncKey,activeTripId()))');
+text=text.replaceAll('localStorage.setItem(localStateKey,JSON.stringify(selected))', 'localStorage.setItem(scopedStorageKey(localStateKey,activeTripId()),JSON.stringify(selected))');
+text=text.replaceAll('localStorage.setItem(localStateKey,JSON.stringify(loaded.state))', 'localStorage.setItem(scopedStorageKey(localStateKey,activeTripId()),JSON.stringify(loaded.state))');
+fs.writeFileSync(path,text);
