@@ -24,18 +24,19 @@ function normalizeTime(raw:string){
  if(hour===0)return `12:${minute} AM`;if(hour<12)return `${hour}:${minute} AM`;if(hour===12)return `12:${minute} PM`;hour-=12;return `${hour}:${minute} PM`;
 }
 function timeFromText(text:string){const match=text.match(/\b(\d{1,2}(?::\d{2})?\s*(?:AM|PM)|(?:[01]?\d|2[0-3]):\d{2})\b/i);return match?normalizeTime(match[1]):'Flexible';}
-function typeFromText(text:string):ItineraryItemType{const lower=text.toLowerCase();if(/flight|airline|airport|train|rail|bus|ferry|depart|arrival|arrive|transport/.test(lower))return'travel';if(/hotel|inn|resort|check[- ]?in|lodging|airbnb/.test(lower))return'hotel';if(/restaurant|dinner|lunch|breakfast|brunch|reservation|table/.test(lower))return'food';if(/reservation|ticket|tour|game|show|museum|admission|booking/.test(lower))return'reservation';return'activity';}
+function typeFromText(text:string):ItineraryItemType{const lower=text.toLowerCase();if(/flight|airline|airport|train|rail|bus|ferry|depart|arrival|arrive|transport/.test(lower))return'travel';if(/hotel|inn|resort|check[- ]?in|lodging|airbnb/.test(lower))return'hotel';if(/restaurant|dinner|lunch|breakfast|brunch|table/.test(lower))return'food';if(/reservation|ticket|tour|game|show|museum|admission|booking/.test(lower))return'reservation';return'activity';}
 function confirmationFromText(text:string){const match=text.match(/(?:confirmation|confirm(?:ation)?\s*(?:number|#)?|booking\s*(?:number|#|ref)?|reservation\s*(?:number|#|ref)?|record locator|reference)\s*[:#-]?\s*([A-Z0-9-]{4,20})/i);return match?.[1];}
 function destinationFromLines(lines:string[]){const labeled=lines.find(line=>/^(?:address|location|destination|venue|hotel)\s*:/i.test(line));if(labeled)return labeled.replace(/^[^:]+:\s*/,'').trim();const at=lines.find(line=>/^at\s+/i.test(line));return at?.replace(/^at\s+/i,'').trim();}
-function cleanTitle(line:string){return line.replace(/^[-•*\s]+/,'').replace(/\b(?:on\s+)?(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/g,'').replace(/\b\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b/ig,'').replace(/\s{2,}/g,' ').replace(/^[,–—:\s]+|[,–—:\s]+$/g,'').trim();}
+function metadataOnly(line:string){return /^(?:confirmation|confirm(?:ation)?\s*(?:number|#)?|booking\s*(?:number|#|ref)?|reservation\s*(?:number|#|ref)?|record locator|reference|address|location|destination|venue)\s*[:#-]/i.test(line);}
+function dateHeadingOnly(line:string,state:TripState){if(!dateFromText(line,state))return false;const stripped=line.replace(/^(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?[,]?\s*/i,'').replace(/\b(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/g,'').replace(/\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+20\d{2})?\b/ig,'').replace(/[,.\-–—\s]/g,'');return stripped.length===0;}
+function cleanTitle(line:string){return line.replace(/^[-•*\s]+/,'').replace(/\b(?:on\s+)?(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/g,'').replace(/\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+20\d{2})?\b/ig,'').replace(/\b\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b/ig,'').replace(/\s{2,}/g,' ').replace(/^[,–—:\s]+|[,–—:\s]+$/g,'').trim();}
 
 export function parseItineraryText(text:string,state:TripState):ItineraryImportSuggestion[]{
  const rawLines=text.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);if(!rawLines.length)return[];
  const suggestions:ItineraryImportSuggestion[]=[];let currentDate:string|undefined;
  for(let index=0;index<rawLines.length;index++){
   const line=rawLines[index];const lineDate=dateFromText(line,state);if(lineDate)currentDate=lineDate;
-  const date=lineDate??currentDate;if(!date)continue;
-  const isDateOnly=Boolean(lineDate)&&cleanTitle(line).length<3;if(isDateOnly)continue;
+  const date=lineDate??currentDate;if(!date||dateHeadingOnly(line,state)||metadataOnly(line))continue;
   const time=timeFromText(line);
   const context=[line,...rawLines.slice(index+1,index+4).filter(next=>!dateFromText(next,state))];
   const combined=context.join(' · ');const type=typeFromText(combined);
@@ -43,7 +44,7 @@ export function parseItineraryText(text:string,state:TripState):ItineraryImportS
   let title=cleanTitle(line);if(!title||title.length<3){title=type==='travel'?'Travel':type==='hotel'?'Hotel':type==='food'?'Meal reservation':'Trip plan';}
   if(suggestions.some(item=>item.date===date&&item.time===time&&item.title.toLowerCase()===title.toLowerCase()))continue;
   const confirmation=confirmationFromText(combined);const destination=destinationFromLines(context.slice(1));
-  suggestions.push({id:`import-${index}-${Math.random().toString(36).slice(2,7)}`,date,time,title,type,destination,keyInfo:confirmation?`Confirmation: ${confirmation}`:undefined,details:context.slice(1).filter(value=>value!==destination&&!/confirmation|booking|reservation\s*(?:number|#|ref)|record locator|reference/i.test(value)).slice(0,2).join(' · ')||undefined,fixed:time!=='Flexible'||['travel','hotel','reservation'].includes(type),selected:true});
+  suggestions.push({id:`import-${index}-${Math.random().toString(36).slice(2,7)}`,date,time,title,type,destination,keyInfo:confirmation?`Confirmation: ${confirmation}`:undefined,details:context.slice(1).filter(value=>value!==destination&&!metadataOnly(value)).slice(0,2).join(' · ')||undefined,fixed:time!=='Flexible'||['travel','hotel','reservation'].includes(type),selected:true});
  }
  return suggestions;
 }
