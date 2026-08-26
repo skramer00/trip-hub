@@ -1,17 +1,24 @@
 import {NextResponse} from 'next/server';
+import {cookies} from 'next/headers';
 import {searchGooglePlaces} from '@/lib/google-places';
+import {validToken} from '@/lib/auth';
 
 export const runtime='nodejs';
 export const maxDuration=20;
 
 const cache=new Map<string,{expires:number;results:Awaited<ReturnType<typeof searchGooglePlaces>>}>();
 
+async function authorized(secret?:string){
+ const token=(await cookies()).get('trip_auth')?.value;
+ if(validToken(token))return true;
+ const expectedSecret=process.env.PLACES_REFRESH_SECRET;
+ return Boolean(expectedSecret&&secret&&secret===expectedSecret);
+}
+
 export async function POST(request:Request){
  try{
   const {query,region,secret}=await request.json() as {query?:string;region?:string;secret?:string};
-  const expectedSecret=process.env.PLACES_REFRESH_SECRET;
-  if(!expectedSecret)return NextResponse.json({error:'PLACES_REFRESH_SECRET is not configured.'},{status:503});
-  if(!secret||secret!==expectedSecret)return NextResponse.json({error:'That Google Places password is not correct.'},{status:401});
+  if(!(await authorized(secret)))return NextResponse.json({error:'Editor access or the Google Places password is required.'},{status:401});
   const cleanQuery=query?.trim()??'';
   if(cleanQuery.length<3)return NextResponse.json({error:'Enter at least three characters.'},{status:400});
   const cleanRegion=['Toronto','Niagara & Buffalo','Other'].includes(region??'')?region!:'Other';
