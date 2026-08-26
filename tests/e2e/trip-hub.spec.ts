@@ -156,3 +156,59 @@ test('itinerary shows exact between-stop directions and saves the travel mode',a
  await connector.getByRole('combobox').selectOption('walking');
  await expect.poll(()=>saved?.days[0].items[1].travelMode).toBe('walking');
 });
+
+test('Add to Day schedules saved places and custom stops from one flow',async({page})=>{
+ const editorState:TripState={...publicState};
+ let saved:TripState|undefined;
+ await page.route('**/api/state',async route=>{
+  if(route.request().method()==='PUT'){
+   saved=route.request().postDataJSON() as TripState;
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({ok:true,cloud:true})});
+   return;
+  }
+  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:editorState,cloud:true,editor:true})});
+ });
+ await page.goto('/');
+ await page.getByRole('button',{name:'Plan',exact:true}).click();
+ await page.getByRole('button',{name:'Edit Itinerary',exact:true}).click();
+ await page.getByRole('button',{name:'+ Add to day'}).click();
+ const dialog=page.getByRole('dialog',{name:'Add to day'});
+ await dialog.getByPlaceholder('Search saved places…').fill('CN Tower');
+ await dialog.locator('input[type="time"]').fill('15:15');
+ await dialog.getByRole('button',{name:'Add',exact:true}).click();
+ await expect.poll(()=>saved?.days[0].items.find(item=>item.placeId==='tower')?.time).toBe('3:15 PM');
+ await expect.poll(()=>saved?.days[0].items.find(item=>item.placeId==='tower')?.estimatedDuration).toBe(60);
+
+ await page.getByRole('button',{name:'+ Add to day'}).click();
+ await page.getByRole('button',{name:'Custom stop'}).click();
+ await page.getByPlaceholder('Lunch, scenic walk, hotel break…').fill('Waterfront break');
+ await page.getByPlaceholder('Optional, but needed for directions').fill('Harbourfront Centre');
+ await page.getByRole('button',{name:'Add custom stop'}).click();
+ await expect.poll(()=>saved?.days[0].items.find(item=>item.title==='Waterfront break')?.mapUrl).toContain('Harbourfront%20Centre');
+ await expect(page.getByRole('button',{name:'↶ Undo planning change'})).toBeVisible();
+});
+
+test('Add to Day saves a Google result with its hours and links the new stop',async({page})=>{
+ let saved:TripState|undefined;
+ await page.addInitScript(()=>sessionStorage.setItem('places-refresh-secret','test-secret'));
+ await page.route('**/api/state',async route=>{
+  if(route.request().method()==='PUT'){
+   saved=route.request().postDataJSON() as TripState;
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({ok:true,cloud:true})});return;
+  }
+  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:publicState,cloud:true,editor:true})});
+ });
+ await page.route('**/api/places/search',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({results:[{googlePlaceId:'google-aquarium',name:"Ripley's Aquarium",formattedAddress:'288 Bremner Blvd, Toronto',category:'Aquarium',weeklyHours:{thursday:{open:'09:00',close:'21:00'}}}]})}));
+ await page.goto('/');
+ await page.getByRole('button',{name:'Plan',exact:true}).click();
+ await page.getByRole('button',{name:'Edit Itinerary',exact:true}).click();
+ await page.getByRole('button',{name:'+ Add to day'}).click();
+ const dialog=page.getByRole('dialog',{name:'Add to day'});
+ await dialog.getByRole('button',{name:'Search Google'}).click();
+ await dialog.getByPlaceholder('Restaurant, attraction, hotel…').fill('Ripley aquarium');
+ await dialog.getByRole('button',{name:'Search',exact:true}).click();
+ await dialog.getByRole('button',{name:'Save + add'}).click();
+ await expect.poll(()=>saved?.places.find(place=>place.googlePlaceId==='google-aquarium')?.weeklyHours?.thursday?.close).toBe('21:00');
+ const googlePlaceId=saved?.places.find(place=>place.googlePlaceId==='google-aquarium')?.id;
+ await expect.poll(()=>saved?.days[0].items.find(item=>item.title==="Ripley's Aquarium")?.placeId).toBe(googlePlaceId);
+});

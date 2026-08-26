@@ -28,6 +28,8 @@ import type {WeatherResponse} from '@/lib/weather';
 import DietaryReview from '@/components/DietaryReview';
 import TripChecklist from '@/components/TripChecklist';
 import RouteConnector from '@/components/RouteConnector';
+import AddToDayPanel from '@/components/AddToDayPanel';
+import {categoryForGooglePlace,defaultDurationForCategory,itineraryItemFromPlace,regionForTripDay} from '@/lib/add-to-day';
 import {lastSyncKey,localStateKey,markCloudSynced,pendingSyncKey,pushCloudState,readLocalState,stageDeviceState} from '@/lib/client-state';
 import {formatPrepDueDate,nextPrepTask,prepDueStatus,prepTasks} from '@/lib/trip-prep';
 
@@ -133,6 +135,7 @@ export default function TripApp(){
  const [offlineMessage,setOfflineMessage]=useState('');
  const [installPrompt,setInstallPrompt]=useState<InstallPromptEvent|null>(null);
  const [boardUndo,setBoardUndo]=useState<TripState|null>(null);
+ const [addToDayIndex,setAddToDayIndex]=useState<number|null>(null);
  const [locationUndo,setLocationUndo]=useState<TripState|null>(null);
  const [liveLocation,setLiveLocation]=useState<AssistantLocation|null>(null);
  const [locationStatus,setLocationStatus]=useState<'idle'|'requesting'|'active'|'error'>('idle');
@@ -382,33 +385,32 @@ export default function TripApp(){
  function editItem(di:number,ii:number,key:EditableKey,value:EditableValue){if(!state)return;const next=structuredClone(state);const item=next.days[di].items[ii];if(key==='optional'||key==='fixed'||key==='locationNotNeeded')item[key]=Boolean(value);else if(key==='skipped'){item.skipped=Boolean(value);if(item.skipped)item.skippedAt??=new Date().toISOString();else delete item.skippedAt;}else if(key==='estimatedDuration'||key==='travelMinutes'||key==='prepBuffer'){if(value===undefined||value==='')delete item[key];else item[key]=Math.max(0,Number(value));}else if(key==='type')item.type=String(value) as ItineraryItem['type'];else if(key==='travelMode')item.travelMode=String(value) as TravelMode;else item[key]=String(value);if(key==='destination')item.mapUrl=mapsUrl(String(value));setState(next);localStorage.setItem('trip-state',JSON.stringify(next));}
  function setTravelMode(di:number,ii:number,mode:TravelMode){if(!state)return;const next=structuredClone(state);next.days[di].items[ii].travelMode=mode;void persist(next);}
  function saveEdits(di?:number){const latest=readLocalState(localStorage)??state;if(!latest)return;const next=structuredClone(latest);if(di!==undefined)next.days[di].items=sortItems(next.days[di].items);void persist(next);}
- function addItem(di:number){if(!state)return;const next=structuredClone(state);next.days[di].items.push({id:`custom-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:'12:00 PM',title:'New stop',details:'',destination:'',routeText:'',keyInfo:'',userNotes:'',done:false,optional:false,fixed:false,type:'activity',estimatedDuration:60,travelMinutes:20,travelMode:'transit',prepBuffer:15});next.days[di].items=sortItems(next.days[di].items);void persist(next);}
- function addPlaceToItinerary(place:Place,di:number,optional=false){
+ function addItem(di:number,value?:{title:string;destination:string;type:ItineraryItem['type'];time:string;optional:boolean}){if(!state)return;const next=structuredClone(state);const destination=value?.destination??'';next.days[di].items.push({id:`custom-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:value?.time??'12:00 PM',title:value?.title??'New stop',details:'',destination,mapUrl:mapsUrl(destination),routeText:destination?'Open transit directions from your current location.':'',keyInfo:'',userNotes:'',done:false,optional:value?.optional??false,fixed:value?.type==='reservation',type:value?.type??'activity',estimatedDuration:60,travelMinutes:20,travelMode:'transit',prepBuffer:15});next.days[di].items=sortItems(next.days[di].items);setBoardUndo(structuredClone(state));void persist(next);}
+ function addPlaceToItinerary(place:Place,di:number,optional=false,time='Flexible'){
   if(!state)return;
   const next=structuredClone(state);
-  const category=`${place.category} ${place.tags.join(' ')}`.toLowerCase();
-  const type:ItineraryItem['type']=/restaurant|food|bakery|coffee|dessert|candy|bar/.test(category)?'food':/hotel/.test(category)?'hotel':/transit|station|airport/.test(category)?'travel':'activity';
-  const destination=place.formattedAddress||place.name;
-  next.days[di].items.push({
-   id:`place-stop-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
-   time:'Flexible',
-   title:place.name,
-   details:place.notes,
-   destination,
-   mapUrl:mapsUrl(destination),
-   routeText:'Open transit directions from your current location.',
-   keyInfo:'',
-   userNotes:'',
-   done:false,
-   optional,
-   fixed:false,
-   type,
-   estimatedDuration:place.estimatedDuration??60,
-   travelMinutes:20,
-   travelMode:'transit',
-   prepBuffer:15,
-   placeId:place.id
-  });
+  next.days[di].items.push(itineraryItemFromPlace(place,time,optional));
+  next.days[di].items=sortItems(next.days[di].items);
+  setBoardUndo(structuredClone(state));
+  void persist(next);
+ }
+ function addGooglePlaceToItinerary(candidate:GooglePlaceCandidate,di:number,time:string,optional:boolean){
+  if(!state)return;
+  const next=structuredClone(state);
+  const normalizedAddress=candidate.formattedAddress?.trim().toLowerCase();
+  let place=next.places.find(saved=>saved.googlePlaceId===candidate.googlePlaceId||(normalizedAddress&&saved.formattedAddress?.trim().toLowerCase()===normalizedAddress));
+  if(place){
+   place.name=candidate.name;place.googlePlaceId=candidate.googlePlaceId;place.formattedAddress=candidate.formattedAddress;place.latitude=candidate.latitude;place.longitude=candidate.longitude;place.mapUrl=candidate.mapUrl??place.mapUrl;place.websiteUrl=candidate.websiteUrl??place.websiteUrl;
+   if(candidate.weeklyHours){place.weeklyHours=candidate.weeklyHours;place.hoursSource='google';place.hoursVerifiedAt=new Date().toISOString();}
+  }else{
+   const region=regionForTripDay(next.days[di]);
+   const category=categoryForGooglePlace(candidate);
+   place={id:`place-google-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,name:candidate.name,region,category,notes:'',mapUrl:candidate.mapUrl??'',menuUrl:'',websiteUrl:candidate.websiteUrl??'',tags:[],priority:'possible',visited:false,estimatedDuration:defaultDurationForCategory(category),googlePlaceId:candidate.googlePlaceId,formattedAddress:candidate.formattedAddress,latitude:candidate.latitude,longitude:candidate.longitude,weeklyHours:candidate.weeklyHours,hoursSource:candidate.weeklyHours?'google':undefined,hoursVerifiedAt:candidate.weeklyHours?new Date().toISOString():undefined,hoursTimeZone:region==='Toronto'?'America/Toronto':region==='Niagara & Buffalo'?'America/New_York':undefined};
+   place.area=suggestPlaceArea(place);next.places.unshift(place);
+  }
+  next.days[di].items.push(itineraryItemFromPlace(place,time,optional));
+  next.days[di].items=sortItems(next.days[di].items);
+  setBoardUndo(structuredClone(state));
   void persist(next);
  }
  function skipItineraryItem(di:number,itemId:string){
@@ -451,13 +453,9 @@ export default function TripApp(){
   void persist(next);
  }
  function addBoardItem(di:number){
-  if(!state)return;
-  setBoardUndo(structuredClone(state));
-  addItem(di);
+  setAddToDayIndex(di);
  }
  function addBoardPlace(place:Place,di:number){
-  if(!state)return;
-  setBoardUndo(structuredClone(state));
   addPlaceToItinerary(place,di);
  }
  function optimizeBoardDay(di:number){
@@ -889,7 +887,7 @@ export default function TripApp(){
     setTab('Itinerary');
     window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
    }}/>}
-   {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2><p className="muted">Use Planning view for a clean route-first outline, or Details when you need every note and setting.</p></div><div className="itineraryHeaderActions"><div className="viewSwitch" aria-label="Itinerary view"><button className={itineraryView==='planning'?'active':''} onClick={()=>setItineraryView('planning')}>Planning</button><button className={itineraryView==='details'?'active':''} onClick={()=>setItineraryView('details')}>Details</button></div><div className="placeActions">{itineraryHoursIssues.length>0&&<span className="chip hoursIssueCount">{itineraryHoursIssues.length} hours notice{itineraryHoursIssues.length===1?'':'s'}</span>}<span className="chip">{completedTrip}/{tripProgress.length} complete</span></div></div></div>{state.days.map((day,di)=><article className={`card dayCard itinerary-${itineraryView}`} key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>addItem(di)}>+ Add stop</button></div></div>{day.items.map((item,ii)=>{const hoursCheck=checkItineraryHours(item,day.date,state.places);return <div className="itineraryStack" key={item.id}>{ii>0&&<RouteConnector from={day.items[ii-1]} to={item} places={state.places} editable onModeChange={mode=>setTravelMode(di,ii,mode)}/>}<div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor compact={itineraryView==='planning'} item={item} dayIndex={di} itemIndex={ii} days={state.days} places={state.places} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div></div></div>;})}</article>)}</section>}
+   {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2><p className="muted">Use Planning view for a clean route-first outline, or Details when you need every note and setting.</p></div><div className="itineraryHeaderActions"><div className="viewSwitch" aria-label="Itinerary view"><button className={itineraryView==='planning'?'active':''} onClick={()=>setItineraryView('planning')}>Planning</button><button className={itineraryView==='details'?'active':''} onClick={()=>setItineraryView('details')}>Details</button></div><div className="placeActions">{boardUndo&&<button className="btn" onClick={undoBoardChange}>↶ Undo planning change</button>}{itineraryHoursIssues.length>0&&<span className="chip hoursIssueCount">{itineraryHoursIssues.length} hours notice{itineraryHoursIssues.length===1?'':'s'}</span>}<span className="chip">{completedTrip}/{tripProgress.length} complete</span></div></div></div>{state.days.map((day,di)=><article className={`card dayCard itinerary-${itineraryView}`} key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>setAddToDayIndex(di)}>+ Add to day</button></div></div>{day.items.map((item,ii)=>{const hoursCheck=checkItineraryHours(item,day.date,state.places);return <div className="itineraryStack" key={item.id}>{ii>0&&<RouteConnector from={day.items[ii-1]} to={item} places={state.places} editable onModeChange={mode=>setTravelMode(di,ii,mode)}/>}<div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor compact={itineraryView==='planning'} item={item} dayIndex={di} itemIndex={ii} days={state.days} places={state.places} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div></div></div>;})}</article>)}</section>}
    {tab==='Locations'&&<LocationResolver days={state.days} places={state.places} canUndo={Boolean(locationUndo)} onUndo={undoLocationChange} onLink={linkItineraryLocation} onGoogleLink={linkGoogleItineraryLocation} onClear={clearItineraryLocation} onCreate={createAndLinkItineraryLocation} onSetNotNeeded={setLocationNotNeeded} onAssignAreas={assignSuggestedAreas} onOpenItem={itemId=>{setTab('Itinerary');window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);}}/>}
    {tab==='Reservations'&&<ReservationsView reservations={reservations} onShowItem={itemId=>{
     setTab('Itinerary');
@@ -928,6 +926,7 @@ export default function TripApp(){
    {tab==='Checklist'&&<TripChecklist items={state.packing} startDate={tripSettings.startDate} onToggle={toggleChecklistItem} onUpdate={updateChecklistItem} onAdd={addChecklistItem} onDelete={deleteChecklistItem} onAddSuggested={addSuggestedChecklistItems}/>}
   </main>
   {editorView&&showDailyBrief&&<DailyBrief state={state} initialDayIndex={briefDayIndex} onClose={()=>setShowDailyBrief(false)} onOffline={downloadOffline}/>}
+  {editorView&&addToDayIndex!==null&&<AddToDayPanel days={state.days} places={state.places} initialDayIndex={addToDayIndex} onClose={()=>setAddToDayIndex(null)} onAddSaved={(place,dayIndex,time,optional)=>addPlaceToItinerary(place,dayIndex,optional,time)} onAddGoogle={addGooglePlaceToItinerary} onAddCustom={value=>addItem(value.dayIndex,value)}/>}
   {showSharePanel&&<div className="editorUnlockBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setShowSharePanel(false);}}><section className="card shareAccessPanel" role="dialog" aria-modal="true" aria-labelledby="share-access-title"><button className="editorUnlockClose" aria-label="Close share and access" onClick={()=>setShowSharePanel(false)}>×</button><div className="eyebrow">SHARE & ACCESS</div><div className="shareAccessHeading"><div><h2 id="share-access-title">Invite people into the trip</h2><p className="muted">Visitors can browse the public itinerary, places, food list, and recap without seeing private planning details.</p></div><span className={`accessModeBadge ${editorView?'editing':'public'}`}>{editorView?'Editing unlocked':'Public view'}</span></div><div className="shareAccessGrid"><div className="shareLinkCard"><strong>Public trip link</strong><div className="shareUrl"><span>{publicUrl||'Loading link…'}</span><button className="btn primary" onClick={copyPublicLink} disabled={!publicUrl}>Copy</button></div><div className="shareButtons"><button className="btn" onClick={sharePublicLink} disabled={!publicUrl}>Share from this device</button>{isEditor&&<button className="btn" onClick={enterPublicPreview}>Preview public view</button>}</div>{shareMessage&&<p className="shareMessage" role="status">{shareMessage}</p>}</div><div className="qrCard"><div className="qrFrame">{qrCode?<Image src={qrCode} alt="QR code for the public Trip Hub link" width={180} height={180} unoptimized/>:<span>Preparing QR code…</span>}</div><small>Scan to open the public trip</small></div></div><div className="privacySummary"><div><span className="privacyIcon public">✓</span><div><strong>Visitors can see</strong><p>Public itinerary, saved places, food ideas, nearby suggestions, and the trip recap.</p></div></div><div><span className="privacyIcon private">⌁</span><div><strong>Stays private</strong><p>Confirmation numbers, Key Info, personal notes, packing lists, dietary guidance, and editing tools.</p></div></div></div>{isEditor?<div className="shareAccessFooter"><div><strong>Editor session is active</strong><span>{publicPreview?'You are previewing the public experience.':'Your private editing tools are currently available on this device.'}</span></div><button className="btn dangerButton" onClick={lockEditor}>Lock editing now</button></div>:<div className="shareAccessFooter"><div><strong>Viewing publicly</strong><span>Use the shared PIN if you need to make changes.</span></div><button className="btn" onClick={()=>{setShowSharePanel(false);setAuthError('');setShowEditorUnlock(true);}}>Editor access</button></div>}</section></div>}
   {showEditorUnlock&&<div className="editorUnlockBackdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setShowEditorUnlock(false);}}><section className="card editorUnlock" role="dialog" aria-modal="true" aria-labelledby="editor-unlock-title"><button className="editorUnlockClose" aria-label="Close editor access" onClick={()=>setShowEditorUnlock(false)}>×</button><div className="eyebrow">PRIVATE EDITING</div><h2 id="editor-unlock-title">Unlock editor mode</h2><p className="muted">Enter the shared editor PIN to update plans, confirmations, private notes, dietary guidance, and checklists.</p><form onSubmit={unlockEditor}><label>Editor PIN<input className="field" type="password" autoFocus autoComplete="current-password" value={editorPin} onChange={event=>setEditorPin(event.target.value)}/></label>{authError&&<p className="error" role="alert">{authError}</p>}<button className="btn primary" disabled={authBusy||!editorPin}>{authBusy?'Unlocking…':'Unlock editing'}</button></form></section></div>}
  </>;

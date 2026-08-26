@@ -12,6 +12,7 @@ type GooglePlace={
  googleMapsUri?:string;
  websiteUri?:string;
  regularOpeningHours?:{periods?:GooglePeriod[];weekdayDescriptions?:string[]};
+ primaryTypeDisplayName?:{text?:string};
 };
 
 function clock(point?:GoogleTimePoint){
@@ -92,7 +93,7 @@ export async function searchGooglePlaces(query:string,region:string,limit=5):Pro
   headers:{
    'content-type':'application/json',
    'X-Goog-Api-Key':apiKey,
-   'X-Goog-FieldMask':'places.id,places.displayName,places.formattedAddress,places.location,places.googleMapsUri,places.websiteUri,places.regularOpeningHours',
+   'X-Goog-FieldMask':'places.id,places.displayName,places.formattedAddress,places.location,places.googleMapsUri,places.websiteUri,places.regularOpeningHours,places.primaryTypeDisplayName',
   },
   body:JSON.stringify({textQuery:`${query}, ${area}`,pageSize:Math.min(8,Math.max(1,limit)),languageCode:'en'}),
   cache:'no-store',
@@ -111,5 +112,6 @@ export async function searchGooglePlaces(query:string,region:string,limit=5):Pro
   mapUrl:match.googleMapsUri,
   websiteUrl:match.websiteUri,
   weeklyHours:match.regularOpeningHours?.periods?.length?rangesFromPeriods(match.regularOpeningHours.periods):undefined,
+  category:match.primaryTypeDisplayName?.text,
  }]:[]);
 }
