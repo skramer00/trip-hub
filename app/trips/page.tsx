@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import CreateTripForm from '@/components/CreateTripForm';
 import {listTrips} from '@/lib/db';
 import type {TripSummary} from '@/lib/trips';
 
@@ -15,5 +16,5 @@ export default async function TripsPage(){
  const current=trips.filter(trip=>trip.status==='active'||trip.status==='upcoming');
  const drafts=trips.filter(trip=>trip.status==='draft');
  const past=trips.filter(trip=>trip.status==='past');
- return <main className="tripCatalog"><header><div><div className="eyebrow">TRIP HUB</div><h1>My Trips</h1><p>Every journey gets its own itinerary, places, food list, checklists, and assistant.</p></div><button className="btn primary" disabled title="Trip creation is the next step">+ Create Trip</button></header>{trips.length?<>{section('Upcoming & active',current)}{section('Drafts',drafts)}{section('Past trips',past)}</>:<div className="card"><h2>No trips found</h2><p>Your existing trip will appear here once the database is available.</p></div>}</main>;
+ return <main className="tripCatalog"><header><div><div className="eyebrow">TRIP HUB</div><h1>My Trips</h1><p>Every journey gets its own itinerary, places, food list, checklists, and assistant.</p></div><CreateTripForm/></header>{trips.length?<>{section('Upcoming & active',current)}{section('Drafts',drafts)}{section('Past trips',past)}</>:<div className="card tripCatalogEmpty"><h2>No trips yet</h2><p>Create your first trip to get a fresh itinerary, food list, saved places, packing list, and trip assistant.</p><CreateTripForm/></div>}</main>;
 }
