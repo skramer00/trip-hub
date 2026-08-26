@@ -10,6 +10,9 @@ type StorageWriter=Pick<Storage,'setItem'|'removeItem'>;
 type TripStorage=StorageReader&StorageWriter;
 type Fetcher=typeof fetch;
 
+let saveQueue:Promise<void>=Promise.resolve();
+let latestSaveRequest=0;
+
 export function readLocalState(storage:StorageReader):TripState|null{
  try{
   const value=storage.getItem(localStateKey);
@@ -28,9 +31,23 @@ export function markCloudSynced(storage:TripStorage,syncedAt=new Date().toISOStr
  return syncedAt;
 }
 
-export async function pushCloudState(next:TripState,fetcher:Fetcher=fetch){
- const response=await fetcher('/api/state',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(next)});
- const result=await response.json().catch(()=>({})) as {cloud?:boolean;error?:string};
- if(!response.ok||!result.cloud)throw new Error(result.error??'Shared saving is temporarily unavailable.');
- return true;
+/**
+ * Saves are intentionally serialized. Several Trip Hub controls can save in quick
+ * succession (checkboxes, notes, itinerary edits). Without a queue, an older PUT
+ * can finish after a newer PUT and overwrite the newest trip state in Supabase.
+ *
+ * The boolean return value is true only for the newest queued save. Callers use
+ * that signal before clearing the device's pending-sync marker, so an earlier save
+ * cannot briefly mark a newer edit as fully synced.
+ */
+export function pushCloudState(next:TripState,fetcher:Fetcher=fetch):Promise<boolean>{
+ const requestId=++latestSaveRequest;
+ const run=saveQueue.catch(()=>{}).then(async()=>{
+  const response=await fetcher('/api/state',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(next)});
+  const result=await response.json().catch(()=>({})) as {cloud?:boolean;error?:string};
+  if(!response.ok||!result.cloud)throw new Error(result.error??'Shared saving is temporarily unavailable.');
+  return requestId===latestSaveRequest;
+ });
+ saveQueue=run.then(()=>undefined,()=>undefined);
+ return run;
 }
