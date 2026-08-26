@@ -35,13 +35,13 @@ describe('client trip persistence',()=>{
   expect(values.get(syncedKey)).toBe('2026-08-19T17:00:00.000Z');
  });
 
- it('sends the complete trip to the trip-scoped protected state route',async()=>{
+ it('keeps the original trip on the compatible protected state route',async()=>{
   const fetcher=vi.fn(async()=>new Response(JSON.stringify({cloud:true}),{status:200,headers:{'content-type':'application/json'}}));
   await expect(pushCloudState(trip,fetcher)).resolves.toBe(true);
-  expect(fetcher).toHaveBeenCalledWith(`/api/state?tripId=${DEFAULT_TRIP_ID}`,expect.objectContaining({method:'PUT',body:JSON.stringify(trip)}));
+  expect(fetcher).toHaveBeenCalledWith('/api/state',expect.objectContaining({method:'PUT',body:JSON.stringify(trip)}));
  });
 
- it('can save a second trip without using the original trip id',async()=>{
+ it('saves a second trip through its own scoped state route',async()=>{
   const fetcher=vi.fn(async()=>new Response(JSON.stringify({cloud:true}),{status:200,headers:{'content-type':'application/json'}}));
   await expect(pushCloudState(trip,fetcher,'boston-2027')).resolves.toBe(true);
   expect(fetcher).toHaveBeenCalledWith('/api/state?tripId=boston-2027',expect.objectContaining({method:'PUT'}));
