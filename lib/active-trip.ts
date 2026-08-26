@@ -6,4 +6,7 @@ export function activeTripId(){
  const path=window.location.pathname.match(/^\/trips\/([^/]+)/)?.[1];
  return normalizeTripId(path||sessionStorage.getItem(activeTripStorageKey)||DEFAULT_TRIP_ID);
 }
-export function stateApiUrl(){return `/api/state?tripId=${encodeURIComponent(activeTripId())}`;}
+export function stateApiUrl(tripId=activeTripId()){
+ const id=normalizeTripId(tripId);
+ return id===DEFAULT_TRIP_ID?'/api/state':`/api/state?tripId=${encodeURIComponent(id)}`;
+}
