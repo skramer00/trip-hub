@@ -4,6 +4,7 @@ let text=fs.readFileSync(path,'utf8');
 if(!text.includes("from '@/lib/active-trip'"))text=text.replace("import {formatPrepDueDate,nextPrepTask,prepDueStatus,prepTasks} from '@/lib/trip-prep';", "import {formatPrepDueDate,nextPrepTask,prepDueStatus,prepTasks} from '@/lib/trip-prep';\nimport {activeTripId,stateApiUrl} from '@/lib/active-trip';\nimport {scopedStorageKey} from '@/lib/client-state';");
 if(!text.includes("from '@/components/TripSwitcher'"))text=text.replace("import AddToDayPanel from '@/components/AddToDayPanel';", "import AddToDayPanel from '@/components/AddToDayPanel';\nimport TripSwitcher from '@/components/TripSwitcher';");
 if(!text.includes("from '@/components/TripOnboarding'"))text=text.replace("import TripSwitcher from '@/components/TripSwitcher';", "import TripSwitcher from '@/components/TripSwitcher';\nimport TripOnboarding from '@/components/TripOnboarding';");
+if(!text.includes("from '@/components/ItineraryImport'"))text=text.replace("import TripOnboarding from '@/components/TripOnboarding';", "import TripOnboarding from '@/components/TripOnboarding';\nimport ItineraryImport from '@/components/ItineraryImport';");
 text=text.replaceAll("fetch('/api/state'", "fetch(stateApiUrl()");
 text=text.replaceAll('readLocalState(localStorage)', 'readLocalState(localStorage,activeTripId())');
 text=text.replaceAll('pushCloudState(local)', 'pushCloudState(local,fetch,activeTripId())');
@@ -19,4 +20,5 @@ text=text.replaceAll("localStorage.setItem('trip-state',JSON.stringify(next))", 
 text=text.replace('<div className="headerActions"><span className={`sync syncStack', '<div className="headerActions"><TripSwitcher/><span className={`sync syncStack');
 const mainMarker='<main className={`shell ${editorView?\'editorMode\':\'viewerMode\'}`}>\n';
 if(!text.includes('<TripOnboarding state={state}'))text=text.replace(mainMarker,`${mainMarker}   {editorView&&!tripSettings.onboardingCompleted&&state.days.flatMap(day=>day.items).length===0&&state.places.length===0&&state.foods.length===0&&state.packing.length===0&&<TripOnboarding state={state} onComplete={next=>void persist(next)}/>}\n`);
+if(!text.includes('<ItineraryImport state={state}'))text=text.replace('<div className="placeActions">{boardUndo&&<button className="btn" onClick={undoBoardChange}>↶ Undo planning change</button>}', '<div className="placeActions"><ItineraryImport state={state} onApply={next=>void persist(next)}/>{boardUndo&&<button className="btn" onClick={undoBoardChange}>↶ Undo planning change</button>}');
 fs.writeFileSync(path,text);
