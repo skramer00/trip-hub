@@ -56,6 +56,25 @@ test('place dietary filters clearly distinguish easy, recommended, and unfiltere
  await expect(page.getByText('St. Lawrence Market',{exact:true})).toBeVisible();
 });
 
+test('Food Nearby uses the same three clear dietary choices',async({page})=>{
+ const editorState:TripState={...publicState,dietaryPreferences:['low-fodmap'],places:[
+  {...publicState.places[0],ignoreHours:true,foodPlace:true,dietaryRatings:[{preference:'low-fodmap',fit:'easy'}]},
+  {...publicState.places[1],ignoreHours:true,foodPlace:true,dietaryRatings:[{preference:'low-fodmap',fit:'difficult'}]}
+ ]};
+ await page.route('**/api/state',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:editorState,cloud:true,editor:true})}));
+ await page.goto('/');
+ await page.getByRole('button',{name:'Explore',exact:true}).click();
+ await page.getByRole('button',{name:'Nearby',exact:true}).click();
+ await page.getByRole('button',{name:'Food nearby',exact:true}).click();
+ const dietaryFit=page.getByLabel('Dietary fit');
+ await expect(dietaryFit.locator('option')).toHaveText(['Easy','Easy + Workable','Any']);
+ await dietaryFit.selectOption('easy');
+ await expect(page.getByText('St. Lawrence Market',{exact:true})).toBeVisible();
+ await expect(page.getByText('CN Tower',{exact:true})).toHaveCount(0);
+ await dietaryFit.selectOption('all');
+ await expect(page.getByText('CN Tower',{exact:true})).toBeVisible();
+});
+
 test('editor itinerary changes are sent to shared saving',async({page})=>{
  const editorState:TripState={...publicState,days:[{...publicState.days[0],items:[{...publicState.days[0].items[0],keyInfo:'Private confirmation'}]}]};
  let saved:TripState|undefined;
@@ -175,9 +194,13 @@ test('Add to Day schedules saved places and custom stops from one flow',async({p
  const dialog=page.getByRole('dialog',{name:'Add to day'});
  await dialog.getByPlaceholder('Search saved places…').fill('CN Tower');
  await dialog.locator('input[type="time"]').fill('15:15');
- await dialog.getByRole('button',{name:'Add',exact:true}).click();
+ await dialog.getByRole('button',{name:'Plan',exact:true}).click();
+ await expect(dialog.getByLabel('Route preview')).toContainText('Route-aware placement');
+ await dialog.getByRole('combobox',{name:'Travel by'}).selectOption('walking');
+ await dialog.getByRole('button',{name:'Add to day',exact:true}).click();
  await expect.poll(()=>saved?.days[0].items.find(item=>item.placeId==='tower')?.time).toBe('3:15 PM');
  await expect.poll(()=>saved?.days[0].items.find(item=>item.placeId==='tower')?.estimatedDuration).toBe(60);
+ await expect.poll(()=>saved?.days[0].items.find(item=>item.placeId==='tower')?.travelMode).toBe('walking');
 
  await page.getByRole('button',{name:'+ Add to day'}).click();
  await page.getByRole('button',{name:'Custom stop'}).click();
@@ -207,7 +230,9 @@ test('Add to Day saves a Google result with its hours and links the new stop',as
  await dialog.getByRole('button',{name:'Search Google'}).click();
  await dialog.getByPlaceholder('Restaurant, attraction, hotel…').fill('Ripley aquarium');
  await dialog.getByRole('button',{name:'Search',exact:true}).click();
- await dialog.getByRole('button',{name:'Save + add'}).click();
+ await dialog.getByRole('button',{name:'Plan',exact:true}).click();
+ await expect(dialog.getByLabel('Route preview')).toBeVisible();
+ await dialog.getByRole('button',{name:'Save place + add to day'}).click();
  await expect.poll(()=>saved?.places.find(place=>place.googlePlaceId==='google-aquarium')?.weeklyHours?.thursday?.close).toBe('21:00');
  const googlePlaceId=saved?.places.find(place=>place.googlePlaceId==='google-aquarium')?.id;
  await expect.poll(()=>saved?.days[0].items.find(item=>item.title==="Ripley's Aquarium")?.placeId).toBe(googlePlaceId);

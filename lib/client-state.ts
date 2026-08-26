@@ -1,4 +1,5 @@
 import type {TripState} from '@/lib/types';
+import {normalizeNearbyDietaryPresets} from '@/lib/dietary';
 
 export const localStateKey='trip-state';
 export const pendingSyncKey='trip-state-pending-sync';
@@ -12,7 +13,7 @@ type Fetcher=typeof fetch;
 export function readLocalState(storage:StorageReader):TripState|null{
  try{
   const value=storage.getItem(localStateKey);
-  return value?JSON.parse(value) as TripState:null;
+  return value?normalizeNearbyDietaryPresets(JSON.parse(value) as TripState):null;
  }catch{return null;}
 }
 

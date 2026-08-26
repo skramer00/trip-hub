@@ -1,4 +1,4 @@
-import {distanceBetweenPlaces,isFixedItem} from '@/lib/assistant';
+import {approximateWalkingMinutes,distanceBetweenPlaces,isFixedItem} from '@/lib/assistant';
 import {checkItineraryHours,findItineraryPlace} from '@/lib/place-hours';
 import {suggestPlaceArea} from '@/lib/place-areas';
 import type {ItineraryItem,Place,TravelMode,TripDay} from '@/lib/types';
@@ -92,18 +92,26 @@ function transitMinutes(distanceKm:number){
  return Math.max(6,Math.round(7+distanceKm*4.5));
 }
 
-export function routeSegment(from:Place,to:Place):RouteSegment{
+function drivingMinutes(distanceKm:number){
+ return Math.max(5,Math.round(4+distanceKm*2.2));
+}
+
+export function routeSegmentForMode(from:Place,to:Place,travelMode:TravelMode='transit'):RouteSegment{
  const distanceKm=distanceBetweenPlaces(from,to);
  const fromArea=placeArea(from);
  const toArea=placeArea(to);
  if(distanceKm!==undefined){
-  const travelMinutes=transitMinutes(distanceKm);
+  const travelMinutes=travelMode==='walking'?approximateWalkingMinutes(distanceKm):travelMode==='driving'?drivingMinutes(distanceKm):transitMinutes(distanceKm);
   const kind=distanceKm<=1?'nearby':fromArea&&fromArea===toArea?'sameArea':'areaChange';
   return {from,to,distanceKm,travelMinutes,kind,label:distanceKm<1?`About ${travelMinutes} min · ${Math.max(100,Math.round(distanceKm*1000/100)*100)} m`:`About ${travelMinutes} min · ${distanceKm.toFixed(1)} km`};
  }
  if(fromArea&&toArea&&fromArea===toArea)return {from,to,kind:'sameArea',label:`Same neighborhood · ${fromArea.split(' — ').at(-1)}`};
  if(fromArea&&toArea)return {from,to,kind:'areaChange',label:`Neighborhood change · ${fromArea.split(' — ').at(-1)} → ${toArea.split(' — ').at(-1)}`};
  return {from,to,kind:'unknown',label:'Travel time not available'};
+}
+
+export function routeSegment(from:Place,to:Place):RouteSegment{
+ return routeSegmentForMode(from,to,'transit');
 }
 
 export function analyzeDayRoute(day:TripDay,places:Place[]):DayRouteAnalysis{

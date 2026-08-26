@@ -3,6 +3,7 @@ import {cookies} from 'next/headers';
 import {loadState,saveState} from '@/lib/db';
 import {initialState} from '@/data/initial';
 import {applyDietaryGuidance} from '@/lib/dietary-guidance';
+import {normalizeNearbyDietaryPresets} from '@/lib/dietary';
 import {validToken} from '@/lib/auth';
 import {publicTripState} from '@/lib/public-state';
 import type {CheckItem,TripState} from '@/lib/types';
@@ -76,16 +77,16 @@ function mergeState(stored:TripState):TripState{
  const initialDates=new Set(initialState.days.map(day=>day.date));
  const customDays=stored.days.filter(day=>!initialDates.has(day.date));
 
- return {
+ return normalizeNearbyDietaryPresets({
   ...initialState,
   ...stored,
   days:[...days,...customDays],
   packing:migrateChecklist(stored.packing?.length?stored.packing:initialState.packing),
   places:applyDietaryGuidance(stored.places?.length?stored.places:initialState.places)
- };
+ });
 }
 
-function freshState():TripState{return {...initialState,packing:migrateChecklist(initialState.packing),places:applyDietaryGuidance(initialState.places)};}
+function freshState():TripState{return normalizeNearbyDietaryPresets({...initialState,packing:migrateChecklist(initialState.packing),places:applyDietaryGuidance(initialState.places)});}
 async function editorRequest(){return validToken((await cookies()).get('trip_auth')?.value);}
 
 export async function GET(){

@@ -488,10 +488,8 @@ export function findNearbyPlaces(
    if(filters.priority&&filters.priority!=='All'&&place.priority!==filters.priority)return false;
    if(filters.dietaryMode&&filters.dietaryMode!=='all'&&(state.dietaryPreferences?.length??0)>0){
     const ratings=(state.dietaryPreferences??[]).map(preference=>dietaryRating(place,preference));
-    if(filters.dietaryMode==='easier-or-unknown'&&ratings.some(rating=>rating?.fit==='difficult'))return false;
-    if(filters.dietaryMode==='easier'&&!ratings.every(rating=>rating&&['easy','workable'].includes(rating.fit)))return false;
+    if(filters.dietaryMode==='recommended'&&!ratings.every(rating=>rating&&['easy','workable'].includes(rating.fit)))return false;
     if(filters.dietaryMode==='easy'&&!ratings.every(rating=>rating?.fit==='easy'))return false;
-    if(filters.dietaryMode==='difficult'&&!ratings.some(rating=>rating?.fit==='difficult'))return false;
    }
    if(needle&&!placeText(place).includes(needle))return false;
    const open=placeOpenStatus(place,now);

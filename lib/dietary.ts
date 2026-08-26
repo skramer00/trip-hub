@@ -1,4 +1,4 @@
-import type {DietaryFit,DietaryPreference,Place} from '@/lib/types';
+import type {DietaryFit,DietaryPreference,NearbyDietaryMode,Place,TripState} from '@/lib/types';
 
 export type DietaryPlaceFitFilter='any'|'recommended'|'easy';
 
@@ -30,6 +30,18 @@ export function placeMatchesDietaryFilter(place:Place,preference:DietaryPreferen
  if(filter==='any')return true;
  if(filter==='recommended')return rating?.fit==='easy'||rating?.fit==='workable';
  return rating?.fit==='easy';
+}
+
+export function normalizeNearbyDietaryMode(value:unknown):NearbyDietaryMode{
+ if(value==='easy')return 'easy';
+ if(value==='recommended'||value==='easier')return 'recommended';
+ return 'all';
+}
+
+export function normalizeNearbyDietaryPresets(state:TripState):TripState{
+ if(!state.nearbyPresets?.length)return state;
+ const nearbyPresets=state.nearbyPresets.map(preset=>({...preset,dietaryMode:normalizeNearbyDietaryMode(preset.dietaryMode)}));
+ return {...state,nearbyPresets};
 }
 export type FoodPlaceClassification='food'|'not-food'|'uncertain';
 export function foodPlaceClassification(place:Place):FoodPlaceClassification{

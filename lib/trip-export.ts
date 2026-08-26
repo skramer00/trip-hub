@@ -1,5 +1,6 @@
 import type {ItineraryItem,TripDay,TripState} from '@/lib/types';
 import {estimatedItemDuration,isFixedItem} from '@/lib/assistant';
+import {normalizeNearbyDietaryPresets} from '@/lib/dietary';
 
 export type CalendarEntry={day:TripDay;item:ItineraryItem};
 export type CalendarEntryDetails={valid:boolean;start?:Date;end?:Date;dateLabel:string;timeLabel:string;timeZone:string;timeZoneLabel:string;duration:number;issue?:string};
@@ -106,5 +107,5 @@ export function restoredTripState(value:unknown){
  const candidate=(record.format==='trip-hub-backup'?record.state:value) as Partial<TripState>;
  if(!candidate||!Array.isArray(candidate.days)||!Array.isArray(candidate.places)||!Array.isArray(candidate.foods)||!Array.isArray(candidate.packing))throw new Error('The backup is missing required trip information.');
  if(candidate.days.some(day=>!day||typeof day.date!=='string'||!Array.isArray(day.items)))throw new Error('The backup contains an invalid itinerary.');
- return candidate as TripState;
+ return normalizeNearbyDietaryPresets(candidate as TripState);
 }
