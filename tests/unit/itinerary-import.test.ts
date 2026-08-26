@@ -24,4 +24,14 @@ describe('itinerary text import',()=>{
   expect(next.days[1].items).toHaveLength(0);
   expect(next.days[0].items[0]).toMatchObject({type:'travel',fixed:true,travelMode:'transit'});
  });
+
+ it('creates and links a saved place when a Google match is approved',()=>{
+  const parsed=parseItineraryText('Sep 25, 2026\n7:00 PM Dinner at Canoe\nLocation: 66 Wellington St W',state);
+  parsed[0].googlePlace={googlePlaceId:'canoe-google',name:'Canoe Restaurant & Bar',formattedAddress:'66 Wellington St W, Toronto, ON',mapUrl:'https://maps.example/canoe',websiteUrl:'https://canoerestaurant.com',category:'Restaurant'};
+  parsed[0].googleMatchEnabled=true;
+  const next=applyItinerarySuggestions(state,parsed);
+  expect(next.places).toHaveLength(1);
+  expect(next.places[0]).toMatchObject({googlePlaceId:'canoe-google',name:'Canoe Restaurant & Bar',foodPlace:true});
+  expect(next.days[1].items[0]).toMatchObject({placeId:next.places[0].id,destination:'66 Wellington St W, Toronto, ON',mapUrl:'https://maps.example/canoe'});
+ });
 });
