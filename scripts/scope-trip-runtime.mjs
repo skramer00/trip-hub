@@ -13,4 +13,5 @@ text=text.replaceAll('localStorage.removeItem(pendingSyncKey)', 'localStorage.re
 text=text.replaceAll('localStorage.getItem(lastSyncKey)', 'localStorage.getItem(scopedStorageKey(lastSyncKey,activeTripId()))');
 text=text.replaceAll('localStorage.setItem(localStateKey,JSON.stringify(selected))', 'localStorage.setItem(scopedStorageKey(localStateKey,activeTripId()),JSON.stringify(selected))');
 text=text.replaceAll('localStorage.setItem(localStateKey,JSON.stringify(loaded.state))', 'localStorage.setItem(scopedStorageKey(localStateKey,activeTripId()),JSON.stringify(loaded.state))');
+text=text.replaceAll("localStorage.setItem('trip-state',JSON.stringify(next))", 'localStorage.setItem(scopedStorageKey(localStateKey,activeTripId()),JSON.stringify(next))');
 fs.writeFileSync(path,text);
