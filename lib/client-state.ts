@@ -38,8 +38,9 @@ export function markCloudSynced(storage:TripStorage,syncedAt=new Date().toISOStr
 export function pushCloudState(next:TripState,fetcher:Fetcher=fetch,tripId=DEFAULT_TRIP_ID):Promise<boolean>{
  const requestId=++latestSaveRequest;
  const id=normalizeTripId(tripId);
+ const url=id===DEFAULT_TRIP_ID?'/api/state':`/api/state?tripId=${encodeURIComponent(id)}`;
  const run=saveQueue.catch(()=>{}).then(async()=>{
-  const response=await fetcher(`/api/state?tripId=${encodeURIComponent(id)}`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(next)});
+  const response=await fetcher(url,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(next)});
   const result=await response.json().catch(()=>({})) as {cloud?:boolean;error?:string};
   if(!response.ok||!result.cloud)throw new Error(result.error??'Shared saving is temporarily unavailable.');
   return requestId===latestSaveRequest;
