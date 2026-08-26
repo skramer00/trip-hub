@@ -1,0 +1,119 @@
+/* Mobile-first usability polish for the screens most likely to be used while traveling. */
+@media (max-width:700px){
+  html{scroll-padding-bottom:92px}
+  body{font-size:16px}
+  .shell{padding:0 10px 112px}
+  .hero{padding:18px 12px 58px}
+  .heroInner{gap:12px}
+  .hero h1{font-size:1.9rem;line-height:1.08}
+  .hero p{font-size:.94rem}
+  .headerActions{width:100%;gap:8px}
+  .headerActions .btn{min-height:44px}
+
+  /* Bottom navigation remains thumb-friendly instead of squeezing every tab. */
+  .tabs{display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;padding-bottom:env(safe-area-inset-bottom);background:rgba(255,255,255,.98)}
+  .tabs button{flex:0 0 auto;min-width:92px;min-height:52px;padding:12px 10px;scroll-snap-align:start;font-size:.78rem;white-space:nowrap}
+
+  .card{border-radius:15px;padding:14px;margin-bottom:10px}
+  .pageIntro,.overviewIntro{display:grid;gap:10px;margin:4px 2px 14px}
+  .pageIntro h2,.overviewIntro h2{font-size:1.55rem;line-height:1.12}
+  .pageIntro>.btn,.overviewIntro>.btn{width:100%;min-height:46px}
+  .eyebrow{font-size:.7rem}
+  .btn{min-height:44px;padding:10px 13px}
+  .textButton,.textLink{display:inline-flex;align-items:center;min-height:40px}
+  .field{min-height:44px;font-size:16px}
+  textarea.field{min-height:88px}
+  .placeActions{gap:8px}
+  .placeActions .btn{flex:1 1 140px}
+
+  /* Overview: compact cards, readable chronology, no cramped columns. */
+  .overviewStats{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:7px!important}
+  .overviewStats>div{padding:11px 8px!important;min-width:0}
+  .overviewStats strong{font-size:1.25rem!important}
+  .overviewStats span{font-size:.7rem!important;line-height:1.15}
+  .overviewTimeline{gap:9px}
+  .overviewDay summary{padding:14px 12px!important;gap:10px!important;align-items:center}
+  .overviewMarker{width:32px!important;height:32px!important;min-width:32px!important}
+  .overviewDayTitle{min-width:0}
+  .overviewDayTitle small{font-size:.68rem}
+  .overviewDayTitle strong{font-size:.98rem;line-height:1.2}
+  .overviewDayTitle em{font-size:.72rem}
+  .overviewDayBody{padding:0 12px 12px!important}
+  .overviewDayBody ol{margin:0;padding:0;list-style:none}
+  .overviewDayBody li{display:grid!important;grid-template-columns:78px minmax(0,1fr)!important;gap:10px!important;padding:12px 0!important;align-items:start}
+  .overviewTime{font-size:.76rem!important;line-height:1.25;padding-top:2px}
+  .overviewItemTitle{align-items:flex-start!important;gap:5px!important}
+  .overviewItemTitle strong{font-size:.94rem;line-height:1.3}
+  .overviewDayActions{display:grid!important;grid-template-columns:1fr 1fr;gap:8px!important}
+  .overviewDayActions .btn{width:100%}
+  .overviewPrep{grid-template-columns:auto 1fr!important;gap:10px!important}
+  .overviewPrep>.btn{grid-column:1/-1;width:100%}
+  .overviewFooter{display:grid!important;gap:8px!important}
+
+  /* Today / live plan: time first, content below, large check targets. */
+  .todayHero{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:16px}
+  .todayHero h2{font-size:1.5rem}
+  .progressRing{min-width:68px;width:68px;height:68px}
+  .statGrid{gap:8px;margin-bottom:16px}
+  .stat{padding:11px}
+  .timelineItem{grid-template-columns:30px minmax(0,1fr)!important;gap:8px 10px!important;padding:14px!important}
+  .timelineItem input{width:22px;height:22px}
+  .timelineItem .timeBadge{grid-column:2!important;justify-self:start;margin-bottom:2px;font-size:.78rem}
+  .timelineCopy{grid-column:2!important;min-width:0}
+  .timelineCopy h3{font-size:1rem;line-height:1.3}
+  .timelineCopy p{font-size:.88rem}
+  .titleRow{align-items:flex-start}
+
+  /* Assistant: one clear action column and no side-by-side squeeze. */
+  .assistantPage{gap:10px}
+  .assistantHero{padding:17px}
+  .assistantHero h2{font-size:1.65rem;line-height:1.12}
+  .assistantHero>p{font-size:.95rem}
+  .assistantStatus{float:none;margin-bottom:8px}
+  .assistantAction,.leaveCard{grid-template-columns:1fr!important;gap:12px!important;padding:16px}
+  .assistantButtons{min-width:0;width:100%}
+  .assistantButtons .btn{width:100%}
+  .reservationSummary{min-width:0;border-left:0!important;border-top:1px solid rgba(255,255,255,.2);padding:12px 0 0!important}
+  .leaveTime{font-size:2rem}
+  .assistantGrid{grid-template-columns:1fr!important}
+  .suggestionCard{min-height:0}
+  .assistantQuickFilters{align-items:stretch}
+  .assistantQuickFilters .btn,.timeChoices button{min-height:42px}
+  .locationControl .placeActions{display:grid;grid-template-columns:1fr}
+  .locationControl .btn{width:100%}
+
+  /* Food and checklists: editing should work comfortably with one thumb. */
+  .checklistTabs{display:flex!important;overflow-x:auto;gap:6px;padding-bottom:3px;-webkit-overflow-scrolling:touch}
+  .checklistTabs button{flex:0 0 auto;min-height:44px;white-space:nowrap}
+  .checklistToolbar{display:grid!important;gap:9px!important}
+  .checklistToolbar .btn{width:100%}
+  .checklistAdd,.checklistEditFields{grid-template-columns:1fr!important}
+  .checklistItem{grid-template-columns:30px minmax(0,1fr)!important;padding:13px!important;gap:9px!important}
+  .checklistComplete input{width:22px!important;height:22px!important}
+  .checklistItemTitle{align-items:flex-start!important;gap:5px!important;flex-wrap:wrap}
+  .checklistItemTitle h3{font-size:.98rem;line-height:1.3}
+  .prepSuggestions{display:grid!important;gap:10px!important}
+  .prepSuggestions .btn{width:100%}
+  .foodEditorPanel,.foodEditorCard,.foodListEditor{max-width:100%!important}
+
+  /* Modal / daily brief controls should never overflow a phone. */
+  .dailyBrief{width:calc(100vw - 14px)!important;max-height:calc(100vh - 14px)!important;border-radius:16px!important;padding:14px!important}
+  .dailyBriefToolbar{display:grid!important;gap:9px!important}
+  .dailyBriefToolbar .placeActions{display:grid;grid-template-columns:1fr 1fr}
+  .dailyBriefToolbar .briefClose{position:absolute;right:12px;top:12px}
+  .briefSchedule article{grid-template-columns:74px minmax(0,1fr)!important;gap:9px!important}
+  .briefSuggestionGrid{grid-template-columns:1fr!important}
+  .editorUnlock,.shareAccessPanel{width:calc(100vw - 20px)!important;max-height:calc(100vh - 30px);overflow:auto}
+}
+
+@media (max-width:430px){
+  .overviewStats{grid-template-columns:1fr 1fr!important}
+  .overviewStats>div:last-child{grid-column:1/-1}
+  .overviewDayBody li{grid-template-columns:68px minmax(0,1fr)!important}
+  .overviewDayActions{grid-template-columns:1fr}
+  .todayHero{grid-template-columns:1fr}
+  .progressRing{justify-self:start}
+  .dailyBriefToolbar .placeActions{grid-template-columns:1fr}
+  .briefSchedule article{grid-template-columns:1fr!important}
+  .briefTime{font-weight:800;color:var(--accent)}
+}
