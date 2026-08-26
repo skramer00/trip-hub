@@ -1,10 +1,20 @@
 import {NextResponse} from 'next/server';
 import {cookies} from 'next/headers';
 import {validToken} from '@/lib/auth';
-import {loadState,saveState} from '@/lib/db';
+import {listTrips,loadState,saveState} from '@/lib/db';
 import {newTripState,slugForTrip,type NewTripInput} from '@/lib/new-trip';
 
 async function editorRequest(){return validToken((await cookies()).get('trip_auth')?.value);}
+
+export async function GET(){
+ try{
+  const trips=await listTrips();
+  return NextResponse.json({ok:true,trips});
+ }catch(error){
+  console.error('Trip catalog load failed.',error);
+  return NextResponse.json({ok:false,trips:[],error:'Trips could not be loaded.'},{status:500});
+ }
+}
 
 export async function POST(req:Request){
  if(!(await editorRequest()))return NextResponse.json({ok:false,error:'Editor access required'},{status:401});
