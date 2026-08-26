@@ -6,31 +6,37 @@ import {publicTripState} from '@/lib/public-state';
 import type {TripState} from '@/lib/types';
 import {validateTripState} from '@/lib/trip-validation';
 import {freshTripState,hydrateStoredState} from '@/lib/state-migrations';
+import {DEFAULT_TRIP_ID,normalizeTripId} from '@/lib/trips';
 
 async function editorRequest(){return validToken((await cookies()).get('trip_auth')?.value);}
+function requestTripId(req:Request){return normalizeTripId(new URL(req.url).searchParams.get('tripId')||DEFAULT_TRIP_ID);}
 
-export async function GET(){
+export async function GET(req:Request){
+ const tripId=requestTripId(req);
  try{
-  const stored=await loadState();
+  const stored=await loadState(tripId);
+  if(!stored&&tripId!==DEFAULT_TRIP_ID)return NextResponse.json({state:null,cloud:true,editor:await editorRequest(),tripId},{status:404});
   const state=stored?hydrateStoredState(stored):freshTripState();
   const editor=await editorRequest();
-  return NextResponse.json({state:editor?state:publicTripState(state),cloud:true,editor});
+  return NextResponse.json({state:editor?state:publicTripState(state),cloud:true,editor,tripId});
  }catch(error){
   console.error('Trip state load failed; using local fallback.',error);
+  if(tripId!==DEFAULT_TRIP_ID)return NextResponse.json({state:null,cloud:false,editor:await editorRequest(),tripId},{status:503});
   const state=freshTripState();
   const editor=await editorRequest();
-  return NextResponse.json({state:editor?state:publicTripState(state),cloud:false,editor});
+  return NextResponse.json({state:editor?state:publicTripState(state),cloud:false,editor,tripId});
  }
 }
 
 export async function PUT(req:Request){
  if(!(await editorRequest()))return NextResponse.json({ok:false,cloud:false,error:'Editor access required'},{status:401});
+ const tripId=requestTripId(req);
  try{
   const state=await req.json() as unknown;
   const validation=validateTripState(state);
   if(!validation.valid)return NextResponse.json({ok:false,cloud:false,error:'Trip data failed validation.',details:validation.errors},{status:400});
-  const saved=await saveState(state as TripState);
-  return NextResponse.json({ok:true,cloud:saved});
+  const saved=await saveState(state as TripState,tripId);
+  return NextResponse.json({ok:true,cloud:saved,tripId});
  }catch(error){
   console.error('Trip state save failed; keeping device copy.',error);
   return NextResponse.json({ok:false,cloud:false,error:'Shared saving is temporarily unavailable. Your changes remain on this device.'},{status:503});
