@@ -2,6 +2,7 @@
 
 import {useEffect,useState} from 'react';
 import type {CheckItem,TripState} from '@/lib/types';
+import {localStateKey,markCloudSynced,pendingSyncKey,pushCloudState,readLocalState,stageDeviceState} from '@/lib/client-state';
 
 type Status='checking'|'hidden'|'ready'|'loading'|'saving'|'error';
 
@@ -28,7 +29,10 @@ export default function FoodListEditor(){
    const response=await fetch('/api/state',{cache:'no-store'});
    const result=await response.json();
    if(!response.ok||!result.editor)throw new Error('Editor access is required.');
-   setState(result.state as TripState);setOpen(true);setStatus('ready');
+   // If another Trip Hub control has an unsynced device copy, edit that newest
+   // version rather than replacing it with an older cloud snapshot.
+   const local=localStorage.getItem(pendingSyncKey)==='true'?readLocalState(localStorage):null;
+   setState(local??result.state as TripState);setOpen(true);setStatus('ready');
   }catch(error){setStatus('error');setMessage(error instanceof Error?error.message:'Food list unavailable.');}
  }
  function updateFood(id:string,changes:Partial<CheckItem>){
@@ -65,13 +69,12 @@ export default function FoodListEditor(){
   const invalid=state.foods.find(food=>!food.title.trim());
   if(invalid){setMessage('Every food needs a name before saving.');return;}
   setStatus('saving');setMessage('');
+  stageDeviceState(localStorage,state);
   try{
-   const response=await fetch('/api/state',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(state)});
-   const result=await response.json();
-   if(!response.ok)throw new Error(result.error??'Food list could not be saved.');
-   setMessage('Food list saved. Refreshing Trip Hub…');
-   window.setTimeout(()=>window.location.reload(),450);
-  }catch(error){setStatus('ready');setMessage(error instanceof Error?error.message:'Food list could not be saved.');}
+   const newest=await pushCloudState(state);
+   if(newest){markCloudSynced(localStorage);setMessage('Food list saved. Refreshing Trip Hub…');window.setTimeout(()=>window.location.reload(),450);}
+   else {setStatus('ready');setMessage('A newer Trip Hub change is still syncing. Your food edits are saved on this device.');}
+  }catch(error){setStatus('ready');setMessage(error instanceof Error?error.message:'Food list could not be saved. Your edits remain on this device.');}
  }
 
  if(status==='checking'||status==='hidden')return null;
