@@ -20,5 +20,5 @@ export type NearbyPreset={id:string,name:string,foodOnly:boolean,query:string,re
 export type GooglePlaceCandidate={googlePlaceId:string;name:string;formattedAddress?:string;latitude?:number;longitude?:number;mapUrl?:string;websiteUrl?:string;weeklyHours?:Partial<Record<Weekday,PlaceHoursRange>>;category?:string};
 export type PublicTripSection='overview'|'today'|'recap'|'explore'|'food';
 export type TripCoverTheme='forest'|'lake'|'sunset';
-export type TripSettings={version:number;title:string;destinations:string;startDate:string;endDate:string;publicMessage:string;coverTheme:TripCoverTheme;publicSections:PublicTripSection[];homeTimeZone?:string;tripTimeZone?:string;onboardingCompleted?:boolean};
+export type TripSettings={version:number;title:string;destinations:string;startDate:string;endDate:string;publicMessage:string;coverTheme:TripCoverTheme;publicSections:PublicTripSection[];homeTimeZone?:string;tripTimeZone?:string;archived?:boolean};
 export type TripState={days:TripDay[],foods:CheckItem[],packing:CheckItem[],places:Place[],settings?:TripSettings,dietaryPreferences?:DietaryPreference[],mealBalanceByDate?:Record<string,DailyMealBalance>,journalNotesByDate?:Record<string,string>,journalMoments?:JournalMoment[],nearbyPresets?:NearbyPreset[],defaultNearbyPresetId?:string,readinessIgnoredActionIds?:string[]};
