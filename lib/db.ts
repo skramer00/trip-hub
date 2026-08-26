@@ -1,5 +1,6 @@
 import {createClient} from '@supabase/supabase-js';
 import type {TripState} from './types';
+import {normalizeItineraryOrder} from './state-order';
 
 const SUPABASE_URL=process.env.NEXT_PUBLIC_SUPABASE_URL??'https://eqkmhlimpcrbxfnqbmru.supabase.co';
 const LOCAL_PUBLISHABLE_KEY=process.env.SUPABASE_PUBLISHABLE_KEY??'sb_publishable_EunOB6Ro5BIhPeAcE0JrHw_usx94FuG';
@@ -18,11 +19,12 @@ export function db(){
 export async function loadState():Promise<TripState|null>{
   const {data,error}=await db().from('trip_state').select('state').eq('id','toronto-2026').maybeSingle();
   if(error)throw error;
-  return data?.state||null;
+  return data?.state?normalizeItineraryOrder(data.state as TripState):null;
 }
 
 export async function saveState(state:TripState){
-  const {error}=await db().from('trip_state').upsert({id:'toronto-2026',state,updated_at:new Date().toISOString()});
+  const ordered=normalizeItineraryOrder(state);
+  const {error}=await db().from('trip_state').upsert({id:'toronto-2026',state:ordered,updated_at:new Date().toISOString()});
   if(error)throw error;
   return true;
 }
