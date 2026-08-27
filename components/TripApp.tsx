@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import {useEffect,useMemo,useRef,useState} from 'react';
+import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
 import type {FormEvent} from 'react';
 import {buildAssistantState,estimatedItemDuration,findNearbyPlaces,findSuggestionCandidates,foodsTriedOnDate,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
 import {checkItineraryHours} from '@/lib/place-hours';
@@ -1215,16 +1215,21 @@ function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onDelete,onSav
 function BoardQuickEditDrawer({item,dayIndex,itemIndex,days,places,onClose,onSave,onDuplicate,onDelete}:{item:ItineraryItem;dayIndex:number;itemIndex:number;days:TripState['days'];places:Place[];onClose:()=>void;onSave:(draft:ItineraryItem,targetDay:number)=>void;onDuplicate:()=>void;onDelete:()=>void}){
  const [draft,setDraft]=useState<ItineraryItem>(()=>structuredClone(item));
  const [targetDay,setTargetDay]=useState(dayIndex);
+ const [confirmDiscard,setConfirmDiscard]=useState(false);
  const closeButtonRef=useRef<HTMLButtonElement>(null);
+ const keepEditingRef=useRef<HTMLButtonElement>(null);
+ const dirty=targetDay!==dayIndex||JSON.stringify(draft)!==JSON.stringify(item);
+ const requestClose=useCallback(()=>{if(dirty){setConfirmDiscard(true);return;}onClose();},[dirty,onClose]);
  function update<K extends keyof ItineraryItem>(key:K,value:ItineraryItem[K]){setDraft(current=>({...current,[key]:value}));}
  useEffect(()=>{
-  function closeOnEscape(event:KeyboardEvent){if(event.key==='Escape')onClose();}
+  function closeOnEscape(event:KeyboardEvent){if(event.key!=='Escape')return;if(confirmDiscard){setConfirmDiscard(false);return;}requestClose();}
   const previousOverflow=document.body.style.overflow;
   document.body.style.overflow='hidden';
   closeButtonRef.current?.focus();
   window.addEventListener('keydown',closeOnEscape);
   return ()=>{window.removeEventListener('keydown',closeOnEscape);document.body.style.overflow=previousOverflow;};
- },[onClose]);
+ },[confirmDiscard,requestClose]);
+ useEffect(()=>{if(confirmDiscard)keepEditingRef.current?.focus();},[confirmDiscard]);
  const previewDay=useMemo(()=>{
   const sourceItems=days[targetDay].items.filter(candidate=>candidate.id!==item.id);
   const items=targetDay===dayIndex?[...sourceItems.slice(0,itemIndex),draft,...sourceItems.slice(itemIndex)]:[...sourceItems,draft];
@@ -1238,9 +1243,9 @@ function BoardQuickEditDrawer({item,dayIndex,itemIndex,days,places,onClose,onSav
  const resolved=locationResolution(draft,places).place;
  const fixed=isFixedItem(draft);
  const itemType=inferItemType(draft);
- return <div className="boardEditBackdrop" role="presentation" onMouseDown={event=>{if(event.currentTarget===event.target)onClose();}}>
+ return <div className="boardEditBackdrop" role="presentation" onMouseDown={event=>{if(event.currentTarget===event.target)requestClose();}}>
   <aside className="boardEditDrawer" role="dialog" aria-modal="true" aria-labelledby="board-edit-title">
-   <header className="boardEditHeader"><div><div className="eyebrow">QUICK EDIT</div><h2 id="board-edit-title">{draft.title||'Untitled stop'}</h2><p>{days[dayIndex].label} · {days[dayIndex].city}</p></div><button ref={closeButtonRef} className="boardEditClose" onClick={onClose} aria-label="Close quick editor">×</button></header>
+   <header className="boardEditHeader"><div><div className="boardEditEyebrow"><span className="eyebrow">QUICK EDIT</span>{dirty&&<span className="boardDirtyBadge">Unsaved changes</span>}</div><h2 id="board-edit-title">{draft.title||'Untitled stop'}</h2><p>{days[dayIndex].label} · {days[dayIndex].city}</p></div><button ref={closeButtonRef} className="boardEditClose" onClick={requestClose} aria-label="Close quick editor">×</button></header>
    <div className="boardEditBody">
     <div className="boardEditPrimary"><label>Time<input className="field" value={draft.time} onChange={event=>update('time',event.target.value)}/></label><label>Duration<input className="field" type="number" min="5" step="5" value={draft.estimatedDuration??''} placeholder={String(estimatedItemDuration(draft))} onChange={event=>update('estimatedDuration',event.target.value?Number(event.target.value):undefined)}/></label></div>
     <label>Title<input className="field" value={draft.title} onChange={event=>update('title',event.target.value)}/></label>
@@ -1254,7 +1259,8 @@ function BoardQuickEditDrawer({item,dayIndex,itemIndex,days,places,onClose,onSav
     <label>Key Info<textarea className="field" rows={3} value={draft.keyInfo??draft.confirmationNumber??''} placeholder="Confirmation, seats, terminal, ticket details…" onChange={event=>update('keyInfo',event.target.value)}/></label>
     <div className="boardEditToggles"><label><input type="checkbox" checked={Boolean(draft.optional)} onChange={event=>update('optional',event.target.checked)}/> Optional</label><label><input type="checkbox" checked={Boolean(draft.locationNotNeeded)} onChange={event=>update('locationNotNeeded',event.target.checked)}/> Route location not needed</label></div>
    </div>
-   <footer className="boardEditFooter"><div><button className="textButton" onClick={onDuplicate}>Duplicate</button><button className="textButton dangerText" onClick={onDelete}>Delete</button></div><div><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={()=>onSave(draft,targetDay)} disabled={!draft.title.trim()}>Save stop</button></div></footer>
+   <footer className="boardEditFooter"><div><button className="textButton" onClick={onDuplicate}>Duplicate</button><button className="textButton dangerText" onClick={onDelete}>Delete</button></div><div><button className="btn" onClick={requestClose}>Cancel</button><button className="btn primary" onClick={()=>onSave(draft,targetDay)} disabled={!dirty||!draft.title.trim()}>Save stop</button></div></footer>
+   {confirmDiscard&&<div className="boardDiscardBackdrop" role="presentation"><section className="boardDiscardDialog" role="alertdialog" aria-modal="true" aria-labelledby="board-discard-title" aria-describedby="board-discard-description"><div className="eyebrow">UNSAVED CHANGES</div><h3 id="board-discard-title">Discard your edits?</h3><p id="board-discard-description">This stop has changes that haven’t been saved yet.</p><div><button ref={keepEditingRef} className="btn primary" onClick={()=>setConfirmDiscard(false)}>Keep editing</button><button className="btn dangerButton" onClick={onClose}>Discard changes</button></div></section></div>}
   </aside>
  </div>;
 }

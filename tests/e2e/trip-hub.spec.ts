@@ -220,6 +220,7 @@ test('Trip Board quick editor previews and saves stop changes without leaving th
  await page.getByRole('button',{name:'Coffee stop',exact:true}).click();
  const editor=page.getByRole('dialog',{name:'Coffee stop'});
  await expect(editor).toBeVisible();
+ await expect(editor.getByRole('button',{name:'Save stop'})).toBeDisabled();
  await editor.getByLabel('Time',{exact:true}).fill('12:00 PM');
  await editor.getByLabel('Type').selectOption('food');
  await editor.getByLabel('Destination').fill('St. Lawrence Market');
@@ -228,11 +229,36 @@ test('Trip Board quick editor previews and saves stop changes without leaving th
  await expect(editor.getByLabel('Route and schedule preview')).toContainText('Lunch reservation');
  await expect(editor.getByLabel('Preview route from Timed tour to Coffee stop').getByRole('link',{name:'Directions ↗'})).toHaveAttribute('href',/origin=CN\+Tower/);
  await expect(editor.getByLabel('Preview route from Coffee stop to Lunch reservation')).toContainText('min margin');
+ await expect(editor.getByText('Unsaved changes',{exact:true})).toBeVisible();
+ await editor.getByRole('button',{name:'Close quick editor'}).click();
+ const discardDialog=page.getByRole('alertdialog',{name:'Discard your edits?'});
+ await expect(discardDialog).toBeVisible();
+ await discardDialog.getByRole('button',{name:'Keep editing'}).click();
+ await expect(discardDialog).toHaveCount(0);
+ await expect(editor.getByLabel('Notes')).toHaveValue('Try a light lunch nearby');
  await editor.getByRole('button',{name:'Save stop'}).click();
  await expect.poll(()=>saved?.days[0].items.find(item=>item.id==='coffee')?.time).toBe('12:00 PM');
  await expect.poll(()=>saved?.days[0].items.find(item=>item.id==='coffee')?.type).toBe('food');
  await expect.poll(()=>saved?.days[0].items.find(item=>item.id==='coffee')?.userNotes).toBe('Try a light lunch nearby');
  await expect(page.getByRole('heading',{name:'Build the whole trip at a glance'})).toBeVisible();
+});
+
+test('Trip Board quick editor only discards changed drafts after confirmation',async({page})=>{
+ await page.route('**/api/state',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:publicState,cloud:true,editor:true})}));
+ await page.goto('/');
+ await page.getByRole('button',{name:'Plan',exact:true}).click();
+ await page.getByRole('button',{name:'Arrive in Toronto',exact:true}).click();
+ const editor=page.getByRole('dialog',{name:'Arrive in Toronto'});
+ await editor.getByLabel('Notes').fill('Keep this draft safe');
+ await page.keyboard.press('Escape');
+ const discardDialog=page.getByRole('alertdialog',{name:'Discard your edits?'});
+ await expect(discardDialog).toBeVisible();
+ await page.keyboard.press('Escape');
+ await expect(discardDialog).toHaveCount(0);
+ await expect(editor.getByLabel('Notes')).toHaveValue('Keep this draft safe');
+ await editor.getByRole('button',{name:'Cancel'}).click();
+ await discardDialog.getByRole('button',{name:'Discard changes'}).click();
+ await expect(editor).toHaveCount(0);
 });
 
 test('Add to Day schedules saved places and custom stops from one flow',async({page})=>{
