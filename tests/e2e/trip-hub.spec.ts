@@ -176,6 +176,65 @@ test('itinerary shows exact between-stop directions and saves the travel mode',a
  await expect.poll(()=>saved?.days[0].items[1].travelMode).toBe('walking');
 });
 
+test('Trip Board previews timing pressure and safely adjusts flexible stops',async({page})=>{
+ const editorState:TripState={...publicState,days:[{...publicState.days[0],items:[
+  {id:'tour',time:'10:00 AM',title:'Timed tour',done:false,fixed:true,estimatedDuration:60,locationNotNeeded:false},
+  {id:'coffee',time:'10:30 AM',title:'Coffee stop',done:false,fixed:false,estimatedDuration:30,travelMinutes:15,locationNotNeeded:false}
+ ]}]};
+ let saved:TripState|undefined;
+ await page.route('**/api/state',async route=>{
+  if(route.request().method()==='PUT'){
+   saved=route.request().postDataJSON() as TripState;
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({ok:true,cloud:true})});
+   return;
+  }
+  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:editorState,cloud:true,editor:true})});
+ });
+ await page.goto('/');
+ await page.getByRole('button',{name:'Plan',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Build the whole trip at a glance'})).toBeVisible();
+ await expect(page.getByText('→ 11:15 AM')).toBeVisible();
+ await expect(page.getByLabel('Route from Timed tour to Coffee stop')).toContainText('45 min late');
+ await page.getByRole('button',{name:'Adjust times'}).click();
+ await expect.poll(()=>saved?.days[0].items[0].time).toBe('10:00 AM');
+ await expect.poll(()=>saved?.days[0].items[1].time).toBe('11:15 AM');
+});
+
+test('Trip Board quick editor previews and saves stop changes without leaving the board',async({page})=>{
+ const editorState:TripState={...publicState,days:[{...publicState.days[0],items:[
+  {id:'tour',time:'10:00 AM',title:'Timed tour',destination:'CN Tower',done:false,fixed:true,estimatedDuration:60},
+  {id:'coffee',time:'11:30 AM',title:'Coffee stop',destination:'Dineen Coffee',done:false,fixed:false,estimatedDuration:30,travelMinutes:15},
+  {id:'dinner',time:'1:00 PM',title:'Lunch reservation',destination:'St. Lawrence Market',done:false,fixed:true,estimatedDuration:60,travelMinutes:20}
+ ]}]};
+ let saved:TripState|undefined;
+ await page.route('**/api/state',async route=>{
+  if(route.request().method()==='PUT'){
+   saved=route.request().postDataJSON() as TripState;
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({ok:true,cloud:true})});
+   return;
+  }
+  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({state:editorState,cloud:true,editor:true})});
+ });
+ await page.goto('/');
+ await page.getByRole('button',{name:'Plan',exact:true}).click();
+ await page.getByRole('button',{name:'Coffee stop',exact:true}).click();
+ const editor=page.getByRole('dialog',{name:'Coffee stop'});
+ await expect(editor).toBeVisible();
+ await editor.getByLabel('Time',{exact:true}).fill('12:00 PM');
+ await editor.getByLabel('Type').selectOption('food');
+ await editor.getByLabel('Destination').fill('St. Lawrence Market');
+ await editor.getByLabel('Notes').fill('Try a light lunch nearby');
+ await expect(editor.getByLabel('Route and schedule preview')).toContainText('Timed tour');
+ await expect(editor.getByLabel('Route and schedule preview')).toContainText('Lunch reservation');
+ await expect(editor.getByLabel('Preview route from Timed tour to Coffee stop').getByRole('link',{name:'Directions ↗'})).toHaveAttribute('href',/origin=CN\+Tower/);
+ await expect(editor.getByLabel('Preview route from Coffee stop to Lunch reservation')).toContainText('min margin');
+ await editor.getByRole('button',{name:'Save stop'}).click();
+ await expect.poll(()=>saved?.days[0].items.find(item=>item.id==='coffee')?.time).toBe('12:00 PM');
+ await expect.poll(()=>saved?.days[0].items.find(item=>item.id==='coffee')?.type).toBe('food');
+ await expect.poll(()=>saved?.days[0].items.find(item=>item.id==='coffee')?.userNotes).toBe('Try a light lunch nearby');
+ await expect(page.getByRole('heading',{name:'Build the whole trip at a glance'})).toBeVisible();
+});
+
 test('Add to Day schedules saved places and custom stops from one flow',async({page})=>{
  const editorState:TripState={...publicState};
  let saved:TripState|undefined;

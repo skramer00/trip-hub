@@ -1,12 +1,14 @@
 'use client';
 
 import Image from 'next/image';
-import {useEffect,useMemo,useState} from 'react';
+import {useEffect,useMemo,useRef,useState} from 'react';
 import type {FormEvent} from 'react';
 import {buildAssistantState,estimatedItemDuration,findNearbyPlaces,findSuggestionCandidates,foodsTriedOnDate,inferItemType,isFixedItem,placeOpenStatus} from '@/lib/assistant';
 import {checkItineraryHours} from '@/lib/place-hours';
 import {areaOptions,groupPlacesByArea,suggestedAreaNames,suggestPlaceArea} from '@/lib/place-areas';
-import {analyzeDayRoute,boardPlace,buildGoogleMapsDayRoute,dayRouteStops,placeArea,routeOrderChanged,suggestDayOrder} from '@/lib/board-planner';
+import {analyzeDayRoute,boardPlace,buildGoogleMapsDayRoute,buildGoogleMapsLeg,dayRouteStops,placeArea,routeOrderChanged,suggestDayOrder} from '@/lib/board-planner';
+import {analyzeDaySchedule,applySuggestedDayTimes} from '@/lib/day-schedule';
+import type {DayScheduleConnection} from '@/lib/day-schedule';
 import {locationResolution,suggestedLocationMatches} from '@/lib/location-resolver';
 import {buildTripReadiness} from '@/lib/trip-readiness';
 import type {ReadinessAction,ReadinessTarget} from '@/lib/trip-readiness';
@@ -29,7 +31,7 @@ import DietaryReview from '@/components/DietaryReview';
 import TripChecklist from '@/components/TripChecklist';
 import RouteConnector from '@/components/RouteConnector';
 import AddToDayPanel from '@/components/AddToDayPanel';
-import {categoryForGooglePlace,defaultDurationForCategory,itineraryItemFromPlace,regionForTripDay} from '@/lib/add-to-day';
+import {categoryForGooglePlace,defaultDurationForCategory,formatTripTime,itineraryItemFromPlace,regionForTripDay} from '@/lib/add-to-day';
 import {lastSyncKey,localStateKey,markCloudSynced,pendingSyncKey,pushCloudState,readLocalState,stageDeviceState} from '@/lib/client-state';
 import {formatPrepDueDate,nextPrepTask,prepDueStatus,prepTasks} from '@/lib/trip-prep';
 
@@ -452,6 +454,17 @@ export default function TripApp(){
   setBoardUndo(structuredClone(state));
   void persist(next);
  }
+ function saveBoardItem(di:number,ii:number,draft:ItineraryItem,targetDay:number){
+  if(!state)return;
+  const next=structuredClone(state);
+  next.days[di].items.splice(ii,1);
+  const saved=structuredClone(draft);
+  if(targetDay!==di){saved.lastRescheduledAt=new Date().toISOString();saved.rescheduledFromDate=next.days[di].date;}
+  next.days[targetDay].items.push(saved);
+  next.days[targetDay].items=sortItems(next.days[targetDay].items);
+  setBoardUndo(structuredClone(state));
+  void persist(next);
+ }
  function addBoardItem(di:number){
   setAddToDayIndex(di);
  }
@@ -465,6 +478,15 @@ export default function TripApp(){
   if(optimized.every((item,index)=>item.id===next.days[di].items[index]?.id))return;
   setBoardUndo(structuredClone(state));
   next.days[di].items=optimized;
+  void persist(next);
+ }
+ function adjustBoardDayTiming(di:number){
+  if(!state)return;
+  const next=structuredClone(state);
+  const adjusted=applySuggestedDayTimes(next.days[di],next.places);
+  if(adjusted.items.every((item,index)=>item.time===next.days[di].items[index]?.time&&item.travelMinutes===next.days[di].items[index]?.travelMinutes))return;
+  setBoardUndo(structuredClone(state));
+  next.days[di]=adjusted;
   void persist(next);
  }
  function undoBoardChange(){
@@ -810,6 +832,7 @@ export default function TripApp(){
 
  const currentDayIndex=useMemo(()=>(state?activeDayIndex(state.days):0),[state]);
  const currentDay=state?.days[currentDayIndex];
+ const currentDaySchedule=useMemo(()=>state&&currentDay?analyzeDaySchedule(currentDay,state.places):null,[currentDay,state]);
  const nextStepIndex=currentDay?.items.findIndex(item=>!item.done&&!item.skipped)??-1;
  const nextStep=nextStepIndex>=0?currentDay?.items[nextStepIndex]:undefined;
  const availableAreas=useMemo(()=>areaOptions(state?.places??[]),[state]);
@@ -858,7 +881,7 @@ export default function TripApp(){
     {nextStep?<div className="card nextStepCard" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><div className="between" style={{alignItems:'flex-start',gap:'16px',marginTop:'6px'}}><div><h2 style={{marginBottom:'4px'}}>{nextStep.title}</h2><div className="muted">{nextStep.time}</div>{nextStep.details&&<p>{nextStep.details}</p>}{nextStep.routeText&&<p className="muted small">🚌 {nextStep.routeText}</p>}{(nextStep.keyInfo||nextStep.confirmationNumber)&&<div style={{marginTop:'12px'}}><strong>Key Info</strong><p style={{whiteSpace:'pre-wrap',marginTop:'4px'}}>{nextStep.keyInfo??nextStep.confirmationNumber}</p></div>}</div><span className="chip">{nextStepIndex+1} of {currentDay.items.length}</span></div><div className="placeActions" style={{marginTop:'14px'}}>{nextStep.mapUrl&&<a className="btn primary" href={nextStep.mapUrl} target="_blank" rel="noreferrer">Open transit directions</a>}<button className="btn" onClick={()=>toggleDay(currentDayIndex,nextStepIndex)}>Mark complete</button></div></div>:<div className="card" style={{marginTop:'16px'}}><div className="eyebrow">NEXT STEP</div><h2 style={{marginTop:'6px'}}>You’re done for today</h2><p className="muted">Every itinerary item for this day is complete.</p></div>}
     <div className="statGrid"><div className="stat"><span>Trip progress</span><strong>{completedTrip}/{tripProgress.length}</strong></div><div className="stat"><span>Saved places</span><strong>{state.places.length}</strong></div><div className="stat"><span>Foods remaining</span><strong>{state.foods.filter(i=>!i.done).length}</strong></div></div>
     <h2 className="sectionTitle">Today’s plan</h2>
-    {currentDay.items.map((item,index)=>{const hoursCheck=checkItineraryHours(item,currentDay.date,state.places);return <div className="timelineStack" key={item.id}>{index>0&&<RouteConnector from={currentDay.items[index-1]} to={item} places={state.places} editable={editorView} onModeChange={mode=>setTravelMode(currentDayIndex,index,mode)}/>}<div className={`card timelineItem ${item.done?'done':''} ${item.skipped?'skipped':''}`}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(currentDayIndex,index)}/><div className="timeBadge">{item.time}</div><ItineraryDetails item={item} places={state.places} dayIndex={currentDayIndex} itemIndex={index} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(currentDayIndex)} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div></div>;})}
+    {currentDay.items.map((item,index)=>{const hoursCheck=checkItineraryHours(item,currentDay.date,state.places);return <div className="timelineStack" key={item.id}>{index>0&&<RouteConnector from={currentDay.items[index-1]} to={item} places={state.places} timing={currentDaySchedule?.connections.get(item.id)} editable={editorView} onModeChange={mode=>setTravelMode(currentDayIndex,index,mode)}/>}<div className={`card timelineItem ${item.done?'done':''} ${item.skipped?'skipped':''}`}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(currentDayIndex,index)}/><div className="timeBadge">{item.time}</div><ItineraryDetails item={item} places={state.places} dayIndex={currentDayIndex} itemIndex={index} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(currentDayIndex)} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div></div>;})}
     <div className="between sectionHeading"><h2 className="sectionTitle">Recommended for this day</h2><button className="textButton" onClick={()=>{setRegion(currentDay.city.includes('Toronto')?'Toronto':'Niagara & Buffalo');setArea('All');setTab('Places');}}>See all</button></div>
     <div className="grid compactGrid">{nearbySuggestions.map(place=><PlaceCard key={place.id} place={place} onToggle={()=>toggleVisited(place.id)}/>)}</div>
    </section>}
@@ -883,10 +906,7 @@ export default function TripApp(){
     setPriority('All');
     setTab('Places');
    }}/>}
-   {tab==='Board'&&<TripBoard days={state.days} places={state.places} canUndo={Boolean(boardUndo)} onUndo={undoBoardChange} onMove={moveBoardItem} onDuplicate={duplicateBoardItem} onAdd={addBoardItem} onAddPlace={addBoardPlace} onOptimize={optimizeBoardDay} onToggle={toggleDay} onTravelMode={setTravelMode} onOpenItem={itemId=>{
-    setTab('Itinerary');
-    window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);
-   }}/>}
+   {tab==='Board'&&<TripBoard days={state.days} places={state.places} canUndo={Boolean(boardUndo)} onUndo={undoBoardChange} onMove={moveBoardItem} onDuplicate={duplicateBoardItem} onDelete={deleteItem} onSaveItem={saveBoardItem} onAdd={addBoardItem} onAddPlace={addBoardPlace} onOptimize={optimizeBoardDay} onAdjustTiming={adjustBoardDayTiming} onToggle={toggleDay} onTravelMode={setTravelMode}/>}
    {tab==='Itinerary'&&<section><div className="pageIntro"><div><div className="eyebrow">FULL SCHEDULE</div><h2>Edit the trip without touching code</h2><p className="muted">Use Planning view for a clean route-first outline, or Details when you need every note and setting.</p></div><div className="itineraryHeaderActions"><div className="viewSwitch" aria-label="Itinerary view"><button className={itineraryView==='planning'?'active':''} onClick={()=>setItineraryView('planning')}>Planning</button><button className={itineraryView==='details'?'active':''} onClick={()=>setItineraryView('details')}>Details</button></div><div className="placeActions">{boardUndo&&<button className="btn" onClick={undoBoardChange}>↶ Undo planning change</button>}{itineraryHoursIssues.length>0&&<span className="chip hoursIssueCount">{itineraryHoursIssues.length} hours notice{itineraryHoursIssues.length===1?'':'s'}</span>}<span className="chip">{completedTrip}/{tripProgress.length} complete</span></div></div></div>{state.days.map((day,di)=><article className={`card dayCard itinerary-${itineraryView}`} key={day.date}><div className="between dayHeader"><div><div className="eyebrow">{day.date}</div><h2>{day.label} · {day.city}</h2></div><div className="placeActions"><span className="chip">{day.items.filter(i=>i.done).length}/{day.items.length}</span><button className="btn primary" onClick={()=>setAddToDayIndex(di)}>+ Add to day</button></div></div>{day.items.map((item,ii)=>{const hoursCheck=checkItineraryHours(item,day.date,state.places);return <div className="itineraryStack" key={item.id}>{ii>0&&<RouteConnector from={day.items[ii-1]} to={item} places={state.places} editable onModeChange={mode=>setTravelMode(di,ii,mode)}/>}<div id={`itinerary-${item.id}`} className={`itineraryRow ${item.done?'done':''}`}><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>toggleDay(di,ii)}/><div style={{minWidth:0,flex:1}}><ItineraryEditor compact={itineraryView==='planning'} item={item} dayIndex={di} itemIndex={ii} days={state.days} places={state.places} hoursCheck={hoursCheck} onEdit={editItem} onSave={()=>saveEdits(di)} onMove={moveItem} onReorder={reorderItem} onDelete={deleteItem} onShowPlace={place=>{setQuery(place.name);setRegion(place.region);setArea('All');setCategory('All');setPriority('All');setTab('Places');}}/></div></div></div>;})}</article>)}</section>}
    {tab==='Locations'&&<LocationResolver days={state.days} places={state.places} canUndo={Boolean(locationUndo)} onUndo={undoLocationChange} onLink={linkItineraryLocation} onGoogleLink={linkGoogleItineraryLocation} onClear={clearItineraryLocation} onCreate={createAndLinkItineraryLocation} onSetNotNeeded={setLocationNotNeeded} onAssignAreas={assignSuggestedAreas} onOpenItem={itemId=>{setTab('Itinerary');window.setTimeout(()=>document.getElementById(`itinerary-${itemId}`)?.scrollIntoView({behavior:'smooth',block:'center'}),0);}}/>}
    {tab==='Reservations'&&<ReservationsView reservations={reservations} onShowItem={itemId=>{
@@ -1059,7 +1079,7 @@ function TripReadinessDashboard({readiness,onOpen,onQuickFix,onIgnore,onRestore}
 
 type DragPosition={dayIndex:number;itemIndex:number};
 
-function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPlace,onOptimize,onToggle,onTravelMode,onOpenItem}:{days:TripState['days'];places:Place[];canUndo:boolean;onUndo:()=>void;onMove:(fromDay:number,fromIndex:number,toDay:number,toIndex:number)=>void;onDuplicate:(dayIndex:number,itemIndex:number)=>void;onAdd:(dayIndex:number)=>void;onAddPlace:(place:Place,dayIndex:number)=>void;onOptimize:(dayIndex:number)=>void;onToggle:(dayIndex:number,itemIndex:number)=>void;onTravelMode:(dayIndex:number,itemIndex:number,mode:TravelMode)=>void;onOpenItem:(itemId:string)=>void}){
+function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onDelete,onSaveItem,onAdd,onAddPlace,onOptimize,onAdjustTiming,onToggle,onTravelMode}:{days:TripState['days'];places:Place[];canUndo:boolean;onUndo:()=>void;onMove:(fromDay:number,fromIndex:number,toDay:number,toIndex:number)=>void;onDuplicate:(dayIndex:number,itemIndex:number)=>void;onDelete:(dayIndex:number,itemIndex:number)=>void;onSaveItem:(dayIndex:number,itemIndex:number,draft:ItineraryItem,targetDay:number)=>void;onAdd:(dayIndex:number)=>void;onAddPlace:(place:Place,dayIndex:number)=>void;onOptimize:(dayIndex:number)=>void;onAdjustTiming:(dayIndex:number)=>void;onToggle:(dayIndex:number,itemIndex:number)=>void;onTravelMode:(dayIndex:number,itemIndex:number,mode:TravelMode)=>void}){
  const [dragging,setDragging]=useState<DragPosition|null>(null);
  const [draggingPlaceId,setDraggingPlaceId]=useState<string|null>(null);
  const [collapsed,setCollapsed]=useState<Set<string>>(()=>new Set());
@@ -1072,6 +1092,7 @@ function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPla
  const [placeCategoryFilter,setPlaceCategoryFilter]=useState('All');
  const [placePriorityFilter,setPlacePriorityFilter]=useState('All');
  const [placeHoursFilter,setPlaceHoursFilter]=useState<'All'|'Known'|'Missing'|'Ignored'>('All');
+ const [editing,setEditing]=useState<{dayIndex:number;itemIndex:number}|null>(null);
  useEffect(()=>{
   try{
    const saved=JSON.parse(localStorage.getItem(boardHiddenDaysKey)??'[]') as string[];
@@ -1162,17 +1183,18 @@ function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPla
      {days.map((day,di)=>({day,di})).filter(({day})=>!hiddenDays.has(day.date)).map(({day,di})=>{
       const isCollapsed=collapsed.has(day.date);
       const route=analyzeDayRoute(day,places);
+      const schedule=analyzeDaySchedule(day,places);
       return <article id={`board-${day.date}`} className={`boardColumn ${isCollapsed?'collapsed':''} ${draggingPlaceId?'acceptingPlace':''}`} key={day.date} onDragOver={event=>event.preventDefault()} onDrop={event=>dropAt(event,di,day.items.length)}>
        <header className="boardColumnHeader"><button className="boardCollapse" onClick={()=>toggleCollapsed(day.date)} aria-expanded={!isCollapsed} aria-label={`${isCollapsed?'Expand':'Collapse'} ${day.label}`}>{isCollapsed?'▸':'▾'}</button><div><div className="eyebrow">{day.date}</div><h3>{day.label}</h3><p>{day.city}</p></div><span className="chip neutral">{day.items.length}</span></header>
        {!isCollapsed&&<>
-        <div className="boardRouteSummary"><div><strong>{route.linkedStops} routed stops</strong><span>{route.totalTravelMinutes?`≈ ${route.totalTravelMinutes} min transit · ${route.totalDistanceKm.toFixed(1)} km`:'Add linked places for travel estimates'}</span></div><div className="boardRouteActions"><button className="textButton" onClick={()=>setRouteDayIndex(di)}>View route</button><button className="textButton" onClick={()=>onOptimize(di)} disabled={!route.canOptimize}>Suggest order</button></div></div>
-        {route.warnings.length>0&&<div className="boardRouteWarnings">{route.warnings.slice(0,2).map(warning=><span key={warning}>⚠ {warning}</span>)}</div>}
+        <div className="boardRouteSummary"><div><strong>{route.linkedStops} routed stops</strong><span>{route.totalTravelMinutes?`≈ ${route.totalTravelMinutes} min transit · ${route.totalDistanceKm.toFixed(1)} km`:'Add linked places for travel estimates'}</span>{schedule.adjustmentCount>0&&<span>{schedule.adjustmentCount} flexible time{schedule.adjustmentCount===1?'':'s'} can be aligned to this order</span>}</div><div className="boardRouteActions"><button className="textButton" onClick={()=>setRouteDayIndex(di)}>View route</button><button className="textButton" onClick={()=>onOptimize(di)} disabled={!route.canOptimize}>Suggest order</button><button className="textButton timingAdjust" onClick={()=>onAdjustTiming(di)} disabled={!schedule.canAdjust}>Adjust times</button></div></div>
+        {(route.warnings.length>0||schedule.notices.length>0)&&<div className="boardRouteWarnings">{[...schedule.notices,...route.warnings].slice(0,3).map(warning=><span key={warning}>⚠ {warning}</span>)}</div>}
         <div className="boardCards">
-         {day.items.map((item,ii)=>{const boardType=inferItemType(item);const linkedPlace=boardPlace(item,places);const linkedArea=placeArea(linkedPlace);return <div className="boardCardStack" key={item.id}>
-          {ii>0&&<RouteConnector compact editable from={day.items[ii-1]} to={item} places={places} onModeChange={mode=>onTravelMode(di,ii,mode)}/>}
+         {day.items.map((item,ii)=>{const boardType=inferItemType(item);const linkedPlace=boardPlace(item,places);const linkedArea=placeArea(linkedPlace);const scheduleEntry=schedule.entryById.get(item.id);return <div className="boardCardStack" key={item.id}>
+          {ii>0&&<RouteConnector compact editable from={day.items[ii-1]} to={item} places={places} timing={schedule.connections.get(item.id)} onModeChange={mode=>onTravelMode(di,ii,mode)}/>}
           <article className={`boardCard board-${boardType} ${item.done?'complete':''} ${dragging?.dayIndex===di&&dragging.itemIndex===ii?'dragging':''}`} draggable onDragStart={event=>{setDragging({dayIndex:di,itemIndex:ii});setDraggingPlaceId(null);event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',item.id);}} onDragEnd={()=>setDragging(null)} onDragOver={event=>event.preventDefault()} onDrop={event=>{event.stopPropagation();dropAt(event,di,ii);}}>
-           <div className="boardCardTop"><button className="dragHandle" aria-label={`Drag ${item.title}`} title="Drag to move">⋮⋮</button><span className="boardTime">{item.time}</span><label className="boardCheck"><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>onToggle(di,ii)}/></label></div>
-           <button className="boardCardTitle" onClick={()=>onOpenItem(item.id)}>{item.title}</button>
+           <div className="boardCardTop"><button className="dragHandle" aria-label={`Drag ${item.title}`} title="Drag to move">⋮⋮</button><span className="boardTime">{item.time}</span>{scheduleEntry?.adjusted&&<span className="suggestedBoardTime">→ {scheduleEntry.suggestedTime}</span>}<label className="boardCheck"><input aria-label={`Mark ${item.title} complete`} type="checkbox" checked={item.done} onChange={()=>onToggle(di,ii)}/></label></div>
+           <button className="boardCardTitle" onClick={()=>setEditing({dayIndex:di,itemIndex:ii})}>{item.title}</button>
            {item.destination&&<p className="boardDestination">{item.destination}</p>}
            <div className="boardBadges"><span className={`boardType type-${boardType}`}>{boardType}</span><span className={`chip ${isFixedItem(item)?'':'neutral'}`}>{isFixedItem(item)?'Fixed':'Flexible'}</span>{linkedArea&&<span className="chip boardArea">{linkedArea.split(' — ').at(-1)}</span>}{item.optional&&<span className="chip neutral">Optional</span>}</div>
            <div className="boardCardActions"><button onClick={()=>ii>0&&onMove(di,ii,di,ii-1)} disabled={ii===0} aria-label={`Move ${item.title} up`}>↑</button><button onClick={()=>ii<day.items.length-1&&onMove(di,ii,di,ii+2)} disabled={ii===day.items.length-1} aria-label={`Move ${item.title} down`}>↓</button><select aria-label={`Move ${item.title} to another day`} value={di} onChange={event=>onMove(di,ii,Number(event.target.value),days[Number(event.target.value)].items.length)}>{days.map((target,targetIndex)=><option value={targetIndex} key={target.date}>{target.label}</option>)}</select><button onClick={()=>onDuplicate(di,ii)} aria-label={`Duplicate ${item.title}`}>⧉</button></div>
@@ -1186,7 +1208,68 @@ function TripBoard({days,places,canUndo,onUndo,onMove,onDuplicate,onAdd,onAddPla
     </div>
    </div>
   </div>
+  {editing&&days[editing.dayIndex]?.items[editing.itemIndex]&&<BoardQuickEditDrawer key={days[editing.dayIndex].items[editing.itemIndex].id} item={days[editing.dayIndex].items[editing.itemIndex]} dayIndex={editing.dayIndex} itemIndex={editing.itemIndex} days={days} places={places} onClose={()=>setEditing(null)} onSave={(draft,targetDay)=>{onSaveItem(editing.dayIndex,editing.itemIndex,draft,targetDay);setEditing(null);}} onDuplicate={()=>{onDuplicate(editing.dayIndex,editing.itemIndex);setEditing(null);}} onDelete={()=>{onDelete(editing.dayIndex,editing.itemIndex);setEditing(null);}}/>}
  </section>;
+}
+
+function BoardQuickEditDrawer({item,dayIndex,itemIndex,days,places,onClose,onSave,onDuplicate,onDelete}:{item:ItineraryItem;dayIndex:number;itemIndex:number;days:TripState['days'];places:Place[];onClose:()=>void;onSave:(draft:ItineraryItem,targetDay:number)=>void;onDuplicate:()=>void;onDelete:()=>void}){
+ const [draft,setDraft]=useState<ItineraryItem>(()=>structuredClone(item));
+ const [targetDay,setTargetDay]=useState(dayIndex);
+ const closeButtonRef=useRef<HTMLButtonElement>(null);
+ function update<K extends keyof ItineraryItem>(key:K,value:ItineraryItem[K]){setDraft(current=>({...current,[key]:value}));}
+ useEffect(()=>{
+  function closeOnEscape(event:KeyboardEvent){if(event.key==='Escape')onClose();}
+  const previousOverflow=document.body.style.overflow;
+  document.body.style.overflow='hidden';
+  closeButtonRef.current?.focus();
+  window.addEventListener('keydown',closeOnEscape);
+  return ()=>{window.removeEventListener('keydown',closeOnEscape);document.body.style.overflow=previousOverflow;};
+ },[onClose]);
+ const previewDay=useMemo(()=>{
+  const sourceItems=days[targetDay].items.filter(candidate=>candidate.id!==item.id);
+  const items=targetDay===dayIndex?[...sourceItems.slice(0,itemIndex),draft,...sourceItems.slice(itemIndex)]:[...sourceItems,draft];
+  return {...days[targetDay],items:sortItems(items)};
+ },[dayIndex,days,draft,item.id,itemIndex,targetDay]);
+ const preview=useMemo(()=>analyzeDaySchedule(previewDay,places),[places,previewDay]);
+ const previewEntry=preview.entryById.get(draft.id);
+ const previewIndex=previewDay.items.findIndex(candidate=>candidate.id===draft.id);
+ const previousItem=previewIndex>0?previewDay.items[previewIndex-1]:undefined;
+ const nextItem=previewIndex>=0?previewDay.items[previewIndex+1]:undefined;
+ const resolved=locationResolution(draft,places).place;
+ const fixed=isFixedItem(draft);
+ const itemType=inferItemType(draft);
+ return <div className="boardEditBackdrop" role="presentation" onMouseDown={event=>{if(event.currentTarget===event.target)onClose();}}>
+  <aside className="boardEditDrawer" role="dialog" aria-modal="true" aria-labelledby="board-edit-title">
+   <header className="boardEditHeader"><div><div className="eyebrow">QUICK EDIT</div><h2 id="board-edit-title">{draft.title||'Untitled stop'}</h2><p>{days[dayIndex].label} · {days[dayIndex].city}</p></div><button ref={closeButtonRef} className="boardEditClose" onClick={onClose} aria-label="Close quick editor">×</button></header>
+   <div className="boardEditBody">
+    <div className="boardEditPrimary"><label>Time<input className="field" value={draft.time} onChange={event=>update('time',event.target.value)}/></label><label>Duration<input className="field" type="number" min="5" step="5" value={draft.estimatedDuration??''} placeholder={String(estimatedItemDuration(draft))} onChange={event=>update('estimatedDuration',event.target.value?Number(event.target.value):undefined)}/></label></div>
+    <label>Title<input className="field" value={draft.title} onChange={event=>update('title',event.target.value)}/></label>
+    <div className="boardEditPrimary"><label>Planning<select className="field" value={fixed?'fixed':'flexible'} onChange={event=>update('fixed',event.target.value==='fixed')}><option value="fixed">Fixed plan</option><option value="flexible">Flexible idea</option></select></label><label>Type<select className="field" value={itemType} onChange={event=>update('type',event.target.value as ItineraryItem['type'])}><option value="reservation">Reservation</option><option value="activity">Activity</option><option value="food">Food</option><option value="travel">Travel</option><option value="hotel">Hotel</option></select></label></div>
+    <label>Destination<input className="field" value={draft.destination??''} placeholder="Where is this stop?" onChange={event=>{const destination=event.target.value;setDraft(current=>({...current,destination,mapUrl:mapsUrl(destination)}));}}/></label>
+    <label>Saved place<select className="field" value={draft.placeId??''} onChange={event=>{const place=places.find(candidate=>candidate.id===event.target.value);setDraft(current=>({...current,placeId:event.target.value||undefined,...(place?{destination:place.name,mapUrl:place.mapUrl}:{} )}));}}><option value="">No saved place linked</option>{['Toronto','Niagara & Buffalo','Other'].map(region=><optgroup label={region} key={region}>{places.filter(place=>place.region===region).sort((a,b)=>a.name.localeCompare(b.name)).map(place=><option value={place.id} key={place.id}>{place.name}</option>)}</optgroup>)}</select>{resolved&&<small>Hours and route data linked to {resolved.name}.</small>}</label>
+    <div className="boardEditPrimary"><label>Travel mode<select className="field" value={draft.travelMode??'transit'} onChange={event=>update('travelMode',event.target.value as TravelMode)}><option value="walking">Walking</option><option value="transit">Public transit</option><option value="driving">Driving</option></select></label><label>Travel time<input className="field" type="number" min="0" step="5" value={draft.travelMinutes??''} placeholder="Auto" onChange={event=>update('travelMinutes',event.target.value?Number(event.target.value):undefined)}/></label></div>
+    <label>Day<select className="field" value={targetDay} onChange={event=>setTargetDay(Number(event.target.value))}>{days.map((day,index)=><option value={index} key={day.date}>{day.label} · {day.city}</option>)}</select></label>
+    <div className="boardTimingPreview" aria-label="Route and schedule preview"><div><span>Route & schedule preview</span><strong>{previewEntry?.adjusted?`${draft.time||'No time'} → ${previewEntry.suggestedTime}`:draft.time||previewEntry?.suggestedTime||'No time set'}</strong></div><span>{fixed?'Fixed time stays anchored':'Flexible time can follow the route'}</span><div className="boardEditRouteFlow">{previousItem?<BoardEditRouteLeg from={previousItem} to={draft} places={places} connection={preview.connections.get(draft.id)}/>:<div className="boardEditRouteEdge"><span>Starts this route</span><strong>{draft.title}</strong></div>}{nextItem&&<BoardEditRouteLeg from={draft} to={nextItem} places={places} connection={preview.connections.get(nextItem.id)}/>}</div>{preview.notices.map(notice=><p key={notice}>⚠ {notice}</p>)}</div>
+    <label>Notes<textarea className="field" rows={3} value={draft.userNotes??''} placeholder="Private reminders or planning notes" onChange={event=>update('userNotes',event.target.value)}/></label>
+    <label>Key Info<textarea className="field" rows={3} value={draft.keyInfo??draft.confirmationNumber??''} placeholder="Confirmation, seats, terminal, ticket details…" onChange={event=>update('keyInfo',event.target.value)}/></label>
+    <div className="boardEditToggles"><label><input type="checkbox" checked={Boolean(draft.optional)} onChange={event=>update('optional',event.target.checked)}/> Optional</label><label><input type="checkbox" checked={Boolean(draft.locationNotNeeded)} onChange={event=>update('locationNotNeeded',event.target.checked)}/> Route location not needed</label></div>
+   </div>
+   <footer className="boardEditFooter"><div><button className="textButton" onClick={onDuplicate}>Duplicate</button><button className="textButton dangerText" onClick={onDelete}>Delete</button></div><div><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={()=>onSave(draft,targetDay)} disabled={!draft.title.trim()}>Save stop</button></div></footer>
+  </aside>
+ </div>;
+}
+
+function BoardEditRouteLeg({from,to,places,connection}:{from:ItineraryItem;to:ItineraryItem;places:Place[];connection?:DayScheduleConnection}){
+ const mode=to.travelMode??'transit';
+ const directions=buildGoogleMapsLeg(from,to,places,mode);
+ const travel=connection?.travelMinutes??to.travelMinutes;
+ const timing=connection?.departureMinutes!==undefined&&connection.arrivalMinutes!==undefined?`Leave ${formatTripTime(connection.departureMinutes)} · arrive ${formatTripTime(connection.arrivalMinutes)}`:undefined;
+ const margin=connection?.gapMinutes;
+ const marginLabel=margin===undefined?undefined:margin<0?`${Math.abs(margin)} min late`:margin<15?`${margin} min margin`:`${margin} min free before ${to.title}`;
+ return <div className={`boardEditRouteLeg ${connection?`timing-${connection.status}`:''}`} aria-label={`Preview route from ${from.title} to ${to.title}`}>
+  <div><span>{from.title}</span><b aria-hidden="true">→</b><strong>{to.title}</strong></div>
+  <div className="boardEditRouteMeta"><span>{mode==='walking'?'Walk':mode==='driving'?'Drive':'Transit'}{travel!==undefined?` · ${travel} min`:''}</span>{timing&&<span>{timing}</span>}{marginLabel&&<span className="boardEditRouteMargin">{marginLabel}</span>}{directions&&<a href={directions} target="_blank" rel="noreferrer">Directions ↗</a>}</div>
+ </div>;
 }
 
 function DayRoutePanel({day,places,onApply,onClose}:{day:TripState['days'][number];places:Place[];onApply:()=>void;onClose:()=>void}){
