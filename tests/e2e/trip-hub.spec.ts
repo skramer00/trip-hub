@@ -282,7 +282,13 @@ test('Add to Day schedules saved places and custom stops from one flow',async({p
  await dialog.getByRole('button',{name:'Plan',exact:true}).click();
  await expect(dialog.getByLabel('Route preview')).toContainText('Route-aware placement');
  await expect(dialog.getByLabel('Stop position')).toContainText('Recommended');
+ await expect(dialog.getByLabel('Day placement preview')).toContainText('CN Tower');
+ await expect(dialog.getByLabel('Day placement preview').locator('li.candidate')).toContainText('Recommended spot');
+ await dialog.getByRole('button',{name:'Use recommended position + time'}).click();
+ await expect(dialog.getByRole('button',{name:'Recommended position and time applied'})).toBeDisabled();
+ await dialog.locator('input[type="time"]').fill('15:15');
  await dialog.getByLabel('Stop position').selectOption('0');
+ await expect(dialog.getByLabel('Day placement preview').locator('li').first()).toContainText('CN Tower');
  await dialog.getByRole('combobox',{name:'Travel by'}).selectOption('walking');
  await dialog.getByRole('button',{name:'Add to day',exact:true}).click();
  await expect.poll(()=>saved?.days[0].items.find(item=>item.placeId==='tower')?.time).toBe('3:15 PM');
