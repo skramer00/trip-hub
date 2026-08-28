@@ -281,11 +281,14 @@ test('Add to Day schedules saved places and custom stops from one flow',async({p
  await dialog.locator('input[type="time"]').fill('15:15');
  await dialog.getByRole('button',{name:'Plan',exact:true}).click();
  await expect(dialog.getByLabel('Route preview')).toContainText('Route-aware placement');
+ await expect(dialog.getByLabel('Stop position')).toContainText('Recommended');
+ await dialog.getByLabel('Stop position').selectOption('0');
  await dialog.getByRole('combobox',{name:'Travel by'}).selectOption('walking');
  await dialog.getByRole('button',{name:'Add to day',exact:true}).click();
  await expect.poll(()=>saved?.days[0].items.find(item=>item.placeId==='tower')?.time).toBe('3:15 PM');
  await expect.poll(()=>saved?.days[0].items.find(item=>item.placeId==='tower')?.estimatedDuration).toBe(60);
  await expect.poll(()=>saved?.days[0].items.find(item=>item.placeId==='tower')?.travelMode).toBe('walking');
+ await expect.poll(()=>saved?.days[0].items[0].placeId).toBe('tower');
 
  await page.getByRole('button',{name:'+ Add to day'}).click();
  await page.getByRole('button',{name:'Custom stop'}).click();

@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {addToDayRoutePreview,categoryForGooglePlace,defaultDurationForCategory,formatTripTime,itemTypeForPlace,itineraryItemFromPlace,regionForTripDay,suggestedAddTime} from '@/lib/add-to-day';
+import {addToDayPlacementOptions,addToDayRoutePreview,categoryForGooglePlace,defaultDurationForCategory,formatTripTime,itemTypeForPlace,itineraryItemFromPlace,regionForTripDay,suggestedAddTime} from '@/lib/add-to-day';
 import type {Place,TripDay} from '@/lib/types';
 
 describe('Add to Day planning helpers',()=>{
@@ -34,7 +34,23 @@ describe('Add to Day planning helpers',()=>{
   expect(preview.placementLabel).toBe('Between CN Tower and St. Lawrence Market');
   expect(preview.incoming?.directionsUrl).toContain('travelmode=walking');
   expect(preview.outgoing?.minutes).toBeGreaterThan(0);
-  expect(preview.suggestedTime).toMatch(/AM|PM/);
+ expect(preview.suggestedTime).toMatch(/AM|PM/);
+ });
+
+ it('recommends the route slot with the least detour',()=>{
+  const places:Place[]=[
+   {id:'tower',name:'CN Tower',region:'Toronto',area:'Downtown',category:'Attraction',notes:'',mapUrl:'',menuUrl:'',websiteUrl:'',tags:[],priority:'must',visited:false,latitude:43.6426,longitude:-79.3871},
+   {id:'market',name:'St. Lawrence Market',region:'Toronto',area:'St. Lawrence',category:'Attraction',notes:'',mapUrl:'',menuUrl:'',websiteUrl:'',tags:[],priority:'must',visited:false,latitude:43.6487,longitude:-79.3715},
+   {id:'aquarium',name:"Ripley's Aquarium",region:'Toronto',area:'Downtown',category:'Attraction',notes:'',mapUrl:'',menuUrl:'',websiteUrl:'',tags:[],priority:'possible',visited:false,latitude:43.6424,longitude:-79.386}
+  ];
+  const day:TripDay={date:'2026-09-25',label:'Fri',city:'Toronto',items:[
+   {id:'tower-stop',time:'10:00 AM',title:'CN Tower',done:false,placeId:'tower',estimatedDuration:60},
+   {id:'market-stop',time:'2:00 PM',title:'St. Lawrence Market',done:false,placeId:'market',fixed:true}
+  ]};
+  const options=addToDayPlacementOptions(day,places,places[2],'12:00 PM','walking',90);
+  expect(options).toHaveLength(3);
+  expect(options.find(option=>option.recommended)?.index).toBe(1);
+  expect(options.find(option=>option.recommended)?.label).toBe('Between CN Tower and St. Lawrence Market');
  });
 
  it('stores the chosen route mode and calculated incoming travel time',()=>{
