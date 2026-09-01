@@ -8,5 +8,12 @@ export function activeTripId(){
 }
 export function stateApiUrl(tripId=activeTripId()){
  const id=normalizeTripId(tripId);
- return id===DEFAULT_TRIP_ID?'/api/state':`/api/state?tripId=${encodeURIComponent(id)}`;
+ const params=new URLSearchParams();
+ if(id!==DEFAULT_TRIP_ID)params.set('tripId',id);
+ if(typeof window!=='undefined'){
+  const share=new URLSearchParams(window.location.search).get('share');
+  if(share)params.set('share',share);
+ }
+ const query=params.toString();
+ return query?`/api/state?${query}`:'/api/state';
 }
