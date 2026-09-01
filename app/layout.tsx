@@ -5,8 +5,10 @@ import './trips/trips.css';
 import './itinerary-import.css';
 import './planning-health.css';
 import './collaboration.css';
+import './account.css';
 import type {Metadata,Viewport} from 'next';
 import FoodListEditor from '@/components/FoodListEditor';
+import AccountSessionBridge from '@/components/AccountSessionBridge';
 
 export const metadata:Metadata={
  metadataBase:new URL('https://www.skramer.app'),
@@ -16,4 +18,4 @@ export const metadata:Metadata={
  appleWebApp:{capable:true,statusBarStyle:'default',title:'Trip Hub'},
 };
 export const viewport:Viewport={themeColor:'#103b2a'};
-export default function RootLayout({children}:{children:React.ReactNode}){return <html lang="en"><body>{children}<FoodListEditor/></body></html>}
+export default function RootLayout({children}:{children:React.ReactNode}){return <html lang="en"><body><AccountSessionBridge/>{children}<FoodListEditor/></body></html>}
