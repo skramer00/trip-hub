@@ -13,7 +13,7 @@ export const dynamic='force-dynamic';
 type TripWithRole=TripSummary&{accessRole:AccountRole|'owner-pin'};
 function section(title:string,trips:TripWithRole[]){
  if(!trips.length)return null;
- return <section className="tripCatalogSection"><h2>{title}</h2><div className="tripCatalogGrid">{trips.map(trip=><article className="card tripCatalogCard" key={trip.id}><Link className="tripCatalogLink" href={`/trips/${trip.id}`}><div className="between"><span className={`tripStatus ${trip.status}`}>{trip.status}</span><span className="chip neutral tripRole">{trip.accessRole==='owner-pin'?'Owner access':trip.accessRole}</span></div><h3>{trip.title}</h3><p>{trip.destinations}</p><small>{trip.startDate}{trip.endDate&&trip.endDate!==trip.startDate?` → ${trip.endDate}`:''}</small></Link>{trip.accessRole!=='viewer'&&<TripManager trip={trip}/>}</article>)}</div></section>;
+ return <section className="tripCatalogSection"><h2>{title}</h2><div className="tripCatalogGrid">{trips.map(trip=><article className="card tripCatalogCard" key={trip.id}><Link className="tripCatalogLink" href={`/trips/${trip.id}`}><div className="between"><span className={`tripStatus ${trip.status}`}>{trip.status}</span><span className="chip neutral tripRole">{trip.accessRole==='owner-pin'?'Owner access':trip.accessRole}</span></div><h3>{trip.title}</h3><p>{trip.destinations}</p><small>{trip.startDate}{trip.endDate&&trip.endDate!==trip.startDate?` → ${trip.endDate}`:''}</small></Link>{trip.accessRole!=='viewer'&&<TripManager trip={trip} canOwn={trip.accessRole==='owner'||trip.accessRole==='owner-pin'}/>}</article>)}</div></section>;
 }
 
 export default async function TripsPage(){
