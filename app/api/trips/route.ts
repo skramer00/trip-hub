@@ -1,7 +1,7 @@
 import {NextResponse} from 'next/server';
 import {cookies} from 'next/headers';
 import {validToken} from '@/lib/auth';
-import {accountStorageTripId,currentAccount,ensureTripAccessRow} from '@/lib/account-auth';
+import {accountStorageTripId,currentAccount,ensureTripAccessRow,membershipsForUser} from '@/lib/account-auth';
 import {db,listTrips,loadState,saveState} from '@/lib/db';
 import {newTripState,slugForTrip,type NewTripInput} from '@/lib/new-trip';
 
@@ -9,8 +9,10 @@ async function masterEditor(){return validToken((await cookies()).get('trip_auth
 
 export async function GET(){
  try{
-  const trips=await listTrips();
-  return NextResponse.json({ok:true,trips});
+  const account=await currentAccount();const master=await masterEditor();const all=await listTrips();
+  if(account){const memberships=await membershipsForUser(account.id);const roles=new Map(memberships.map(item=>[item.tripId,item.role]));const trips=all.filter(trip=>roles.has(trip.id)).map(trip=>({...trip,accessRole:roles.get(trip.id)}));return NextResponse.json({ok:true,trips,account:{email:account.email,name:account.name}});}
+  if(master)return NextResponse.json({ok:true,trips:all.map(trip=>({...trip,accessRole:'owner'})),legacyOwner:true});
+  return NextResponse.json({ok:true,trips:[]});
  }catch(error){
   console.error('Trip catalog load failed.',error);
   return NextResponse.json({ok:false,trips:[],error:'Trips could not be loaded.'},{status:500});
