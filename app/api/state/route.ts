@@ -3,13 +3,14 @@ import {cookies} from 'next/headers';
 import {loadState,saveState} from '@/lib/db';
 import {validToken} from '@/lib/auth';
 import {inviteCanEdit,tripAccessCookieName} from '@/lib/collaboration';
+import {accountCanEdit} from '@/lib/account-auth';
 import {publicTripState} from '@/lib/public-state';
 import type {TripState} from '@/lib/types';
 import {validateTripState} from '@/lib/trip-validation';
 import {freshTripState,hydrateStoredState} from '@/lib/state-migrations';
 import {DEFAULT_TRIP_ID,normalizeTripId} from '@/lib/trips';
 
-async function editorRequest(tripId:string){const jar=await cookies();return validToken(jar.get('trip_auth')?.value)||inviteCanEdit(jar.get(tripAccessCookieName(tripId))?.value,tripId);}
+async function editorRequest(tripId:string){const jar=await cookies();return validToken(jar.get('trip_auth')?.value)||inviteCanEdit(jar.get(tripAccessCookieName(tripId))?.value,tripId)||await accountCanEdit(tripId);}
 function requestTripId(req:Request){return normalizeTripId(new URL(req.url).searchParams.get('tripId')||DEFAULT_TRIP_ID);}
 
 export async function GET(req:Request){
