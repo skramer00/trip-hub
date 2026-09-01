@@ -4,6 +4,7 @@ import {db} from './db';
 import {DEFAULT_TRIP_ID,LEGACY_TRIP_ID,normalizeTripId} from './trips';
 
 export type AccountRole='owner'|'editor'|'viewer';
+export type TripVisibility='private'|'shared'|'public';
 export type AccountIdentity={id:string;email:string;name?:string;exp:number};
 export const accountCookieName='trip_account';
 
@@ -37,8 +38,18 @@ export async function accountRoleForTrip(userId:string,tripId:string):Promise<Ac
  if(error)return null;return (data?.role as AccountRole|undefined)??null;
 }
 export async function accountCanEdit(tripId:string){const account=await currentAccount();if(!account)return false;const role=await accountRoleForTrip(account.id,tripId);return role==='owner'||role==='editor';}
+export async function accountCanView(tripId:string){const account=await currentAccount();if(!account)return false;return Boolean(await accountRoleForTrip(account.id,tripId));}
 export async function accountIsOwner(tripId:string){const account=await currentAccount();if(!account)return false;return (await accountRoleForTrip(account.id,tripId))==='owner';}
-export async function ensureTripAccessRow(tripId:string){const id=storageTripId(tripId);await db().from('trip_access').upsert({trip_id:id,visibility:'public'},{onConflict:'trip_id'});return id;}
+export async function tripVisibility(tripId:string):Promise<TripVisibility>{
+ const {data}=await db().from('trip_access').select('visibility').eq('trip_id',storageTripId(tripId)).maybeSingle();
+ return (data?.visibility as TripVisibility|undefined)??'public';
+}
+export async function setTripVisibility(tripId:string,visibility:TripVisibility){
+ const id=storageTripId(tripId);
+ const {error}=await db().from('trip_access').upsert({trip_id:id,visibility,updated_at:new Date().toISOString()},{onConflict:'trip_id'});
+ if(error)throw error;return visibility;
+}
+export async function ensureTripAccessRow(tripId:string,visibility:TripVisibility='private'){const id=storageTripId(tripId);await db().from('trip_access').upsert({trip_id:id,visibility},{onConflict:'trip_id',ignoreDuplicates:true});return id;}
 export async function membershipsForUser(userId:string){
  const {data,error}=await db().from('trip_members').select('trip_id,role').eq('user_id',userId);if(error)throw error;
  return (data??[]).map(row=>({tripId:row.trip_id===LEGACY_TRIP_ID?DEFAULT_TRIP_ID:row.trip_id,role:row.role as AccountRole}));
