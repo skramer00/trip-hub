@@ -32,7 +32,8 @@ export async function POST(req:Request){
   while(await loadState(tripId)){tripId=`${base}-${suffix++}`;}
   const state=newTripState(input);
   await saveState(state,tripId);
-  if(account){await ensureTripAccessRow(tripId);await db().from('trip_members').upsert({trip_id:accountStorageTripId(tripId),user_id:account.id,role:'owner'},{onConflict:'trip_id,user_id'});}
+  await ensureTripAccessRow(tripId,'private');
+  if(account)await db().from('trip_members').upsert({trip_id:accountStorageTripId(tripId),user_id:account.id,role:'owner'},{onConflict:'trip_id,user_id'});
   return NextResponse.json({ok:true,tripId,state});
  }catch(error){
   console.error('Trip creation failed.',error);
