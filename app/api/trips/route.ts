@@ -1,10 +1,11 @@
 import {NextResponse} from 'next/server';
 import {cookies} from 'next/headers';
 import {validToken} from '@/lib/auth';
-import {listTrips,loadState,saveState} from '@/lib/db';
+import {accountStorageTripId,currentAccount,ensureTripAccessRow} from '@/lib/account-auth';
+import {db,listTrips,loadState,saveState} from '@/lib/db';
 import {newTripState,slugForTrip,type NewTripInput} from '@/lib/new-trip';
 
-async function editorRequest(){return validToken((await cookies()).get('trip_auth')?.value);}
+async function masterEditor(){return validToken((await cookies()).get('trip_auth')?.value);}
 
 export async function GET(){
  try{
@@ -17,7 +18,8 @@ export async function GET(){
 }
 
 export async function POST(req:Request){
- if(!(await editorRequest()))return NextResponse.json({ok:false,error:'Editor access required'},{status:401});
+ const account=await currentAccount();
+ if(!account&&!(await masterEditor()))return NextResponse.json({ok:false,error:'Sign in or unlock owner access to create a trip.'},{status:401});
  try{
   const input=await req.json() as NewTripInput;
   if(!input.title?.trim()||!input.destinations?.trim()||!input.startDate||!input.endDate||!input.tripTimeZone)return NextResponse.json({ok:false,error:'Title, destinations, dates, and trip timezone are required.'},{status:400});
@@ -28,6 +30,7 @@ export async function POST(req:Request){
   while(await loadState(tripId)){tripId=`${base}-${suffix++}`;}
   const state=newTripState(input);
   await saveState(state,tripId);
+  if(account){await ensureTripAccessRow(tripId);await db().from('trip_members').upsert({trip_id:accountStorageTripId(tripId),user_id:account.id,role:'owner'},{onConflict:'trip_id,user_id'});}
   return NextResponse.json({ok:true,tripId,state});
  }catch(error){
   console.error('Trip creation failed.',error);
