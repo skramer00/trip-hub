@@ -19,12 +19,13 @@ function section(title:string,trips:TripWithRole[]){
 export default async function TripsPage(){
  const account=await currentAccount();
  const masterOwner=validToken((await cookies()).get('trip_auth')?.value);
- let trips:TripWithRole[]=[];
+ let trips:TripWithRole[]=[];let legacyTrips:TripSummary[]=[];
  try{
   const all=await listTrips();
   if(account){
    const memberships=await membershipsForUser(account.id);const roles=new Map(memberships.map(item=>[item.tripId,item.role]));
    trips=all.filter(trip=>roles.has(trip.id)).map(trip=>({...trip,accessRole:roles.get(trip.id)!}));
+   if(masterOwner)legacyTrips=all.filter(trip=>!roles.has(trip.id));
   }else if(masterOwner){trips=all.map(trip=>({...trip,accessRole:'owner-pin' as const}));}
  }catch{}
  const current=trips.filter(trip=>trip.status==='active'||trip.status==='upcoming');
@@ -32,5 +33,5 @@ export default async function TripsPage(){
  const past=trips.filter(trip=>trip.status==='past');
  const archived=trips.filter(trip=>trip.status==='archived');
  const canCreate=Boolean(account||masterOwner);
- return <main className="tripCatalog"><header><div><div className="eyebrow">TRIP HUB</div><h1>My Trips</h1><p>{account?'Trips you own or have been invited to.':'Your private trip workspace and shared journeys.'}</p></div>{canCreate&&<CreateTripForm/>}</header><MyTripsAccount account={account?{email:account.email,name:account.name}:null}/>{canCreate?(trips.length?<>{section('Upcoming & active',current)}{section('Drafts',drafts)}{section('Past trips',past)}{section('Archived',archived)}</>:<div className="card tripCatalogEmpty"><h2>No trips on this account yet</h2><p>Create a trip, or accept an invitation from another traveler.</p><CreateTripForm/></div>):null}</main>;
+ return <main className="tripCatalog"><header><div><div className="eyebrow">TRIP HUB</div><h1>My Trips</h1><p>{account?'Trips you own or have been invited to.':'Your private trip workspace and shared journeys.'}</p></div>{canCreate&&<CreateTripForm/>}</header><MyTripsAccount account={account?{email:account.email,name:account.name}:null} legacyTrips={legacyTrips.map(trip=>({id:trip.id,title:trip.title,destinations:trip.destinations}))}/>{canCreate?(trips.length?<>{section('Upcoming & active',current)}{section('Drafts',drafts)}{section('Past trips',past)}{section('Archived',archived)}</>:<div className="card tripCatalogEmpty"><h2>No trips on this account yet</h2><p>{account?'If you have an older Trip Hub trip, use account migration above to attach it. Otherwise create your first trip.':'Create a trip, or accept an invitation from another traveler.'}</p><CreateTripForm/></div>):null}</main>;
 }
