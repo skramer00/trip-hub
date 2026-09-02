@@ -8,6 +8,7 @@ import './planning-health.css';
 import './collaboration.css';
 import './account.css';
 import './smart-starter.css';
+import './discovery.css';
 import type {Metadata,Viewport} from 'next';
 import FoodListEditor from '@/components/FoodListEditor';
 import AccountSessionBridge from '@/components/AccountSessionBridge';
