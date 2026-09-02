@@ -2,6 +2,7 @@ import './globals.css';
 import './settings.css';
 import './mobile.css';
 import './trips/trips.css';
+import './trips/polish.css';
 import './itinerary-import.css';
 import './planning-health.css';
 import './collaboration.css';
