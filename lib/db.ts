@@ -48,8 +48,8 @@ export async function deleteState(tripId:string){
 export async function listTrips():Promise<TripSummary[]>{
  const {data,error}=await db().from('trip_state').select('id,state,updated_at').order('updated_at',{ascending:false});
  if(error)throw error;
- const rows=(data??[]) as {id:string;state:TripState}[];
- const summaries=rows.filter(row=>row.state?.settings).map(row=>tripSummary(row.id===LEGACY_TRIP_ID?DEFAULT_TRIP_ID:row.id,normalizeItineraryOrder(row.state)));
+ const rows=(data??[]) as {id:string;state:TripState;updated_at?:string}[];
+ const summaries=rows.filter(row=>row.state?.settings).map(row=>tripSummary(row.id===LEGACY_TRIP_ID?DEFAULT_TRIP_ID:row.id,normalizeItineraryOrder(row.state),row.updated_at));
  const unique=new Map<string,TripSummary>();
  summaries.forEach(summary=>{if(!unique.has(summary.id))unique.set(summary.id,summary);});
  return [...unique.values()].sort((a,b)=>(a.startDate||'9999').localeCompare(b.startDate||'9999'));
